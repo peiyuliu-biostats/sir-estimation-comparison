@@ -1,0 +1,500 @@
+#measles and covid-19 sir model: stochastic model fitting (least squares + bootstrap)
+
+library(deSolve)    
+library(ggplot2)  
+library(dplyr)    
+library(gridExtra)  
+library(showtext)
+library(lubridate)
+library(readr)
+library(httr)
+library(zoo)
+library(tidyr)
+library(Rcpp)
+
+showtext_auto()
+
+sourceCpp("stoch_SIR_rcpp.cpp")
+
+
+#stochastic sir model function
+stoch_SIR <- function(T, beta, gamma, n, m, N) {
+  #initialize (x= number of S, y=number of I, t=event time)
+  x <- n
+  y <- m
+  z <- 1
+  t <- 0
+  N <- n + m
+  #possible events: infection(S->I) and removal(I->R)
+  eventLevels <- c("S->I", "I->R")
+  #initialize result
+  df_SIR <- data.frame(t = t, x = x, y = y, totalinfected = z, event = NA)
+  #loop until time T or the epidemic stops (there are no infectives)
+  while (t < T & (y > 0)) {
+    #draw the waiting time for each possible event
+    wait <- rexp(2, c(
+      "S->I" = beta / N * x * y, #rate for "S->I"
+      "I->R" = gamma * y #rate for "I->R"
+    ))
+    
+    #determine which event occurs first
+    i <- which.min(wait)
+    
+    #record event time
+    t <- t + wait[i]
+    
+    #update the number of S and I according to the event type
+    if (eventLevels[i] == "S->I") {
+      x <- x - 1  #the number of S will decrease by 1.
+      y <- y + 1
+      z <- z + 1
+    }
+    if (eventLevels[i] == "I->R") {
+      y <- y - 1
+    }
+    #store result
+    df_SIR <- rbind(df_SIR, c(t, x, y, z, i))
+  }
+  #re-code event type and return
+  df_SIR$event <- factor(eventLevels[df_SIR$event], levels = eventLevels)
+  
+  return(df_SIR)
+}
+
+#stochastic sir simulation function 
+#run multiple stochastic simulations and calculate average
+simulate_stoch_SIR_average <- function(beta, gamma, time_points, n_sims, N) {
+  all_results <- list()
+  
+  for(i in 1:n_sims) {
+    set.seed(i * 1000)  #ensure reproducibility
+    result <- stoch_SIR_rcpp(T = max(time_points), beta = beta, gamma = gamma, 
+                             n = N-1, m = 1, N = N)
+    
+    #interpolate at specified time points
+    if(nrow(result) > 1) {
+      interpolated_I <- approx(x = result$t, y = result$y, xout = time_points, 
+                               method = "constant", rule = 2)$y
+      interpolated_I[is.na(interpolated_I)] <- 0
+    } else {
+      interpolated_I <- rep(0, length(time_points))
+    }
+    
+    all_results[[i]] <- interpolated_I
+  }
+  
+  #calculate average
+  result_matrix <- do.call(rbind, all_results)
+  average_I <- colMeans(result_matrix, na.rm = TRUE)
+  
+  return(average_I)
+}
+
+
+#analysis 1: measles data
+
+
+#data loading and preprocessing 
+#load niamey measles data
+niamey <- read.csv("http://kingaa.github.io/clim-dis/parest/niamey.csv")
+
+measles_data <- niamey %>% filter(community == "A") %>%
+  select(biweek, measles) %>%
+  arrange(biweek)
+
+#user parameter settings
+N <- 3500  #total population size
+#initial parameters for stochastic model
+initial_beta_stoch <- 1   #initial transmission rate for stochastic model (usually slightly higher than deterministic model)
+initial_gamma_stoch <- 0.2  #initial recovery rate
+
+#bootstrap parameters
+n_bootstrap <- 300
+n_simulations <- 50  #number of stochastic simulations per fitting
+
+#method 1: least squares (stochastic sir) 
+cat("running least squares fitting (stochastic sir model)...\n")
+
+#objective function: calculate sum of squared residuals between stochastic model predictions and observations
+ls_stoch_objective <- function(params) {
+  if(any(params <= 0)) return(1e10)  #ensure parameters are positive
+  
+  tryCatch({
+    #use stochastic sir simulation
+    predicted_I <- simulate_stoch_SIR_average(beta = params[1], gamma = params[2], 
+                                              time_points = measles_data$biweek, n_sims = n_simulations, N = N)
+    
+    #calculate sum of squared residuals
+    residuals <- (measles_data$measles - predicted_I)^2
+    return(sum(residuals, na.rm = TRUE))
+  }, error = function(e) return(1e10))
+}
+
+#use optim function for minimization
+ls_stoch_result <- optim(par = c(initial_beta_stoch, initial_gamma_stoch), 
+                         fn = ls_stoch_objective, 
+                         method = "L-BFGS-B", 
+                         lower = c(0.001, 0.001),
+                         upper = c(2, 2))
+
+ls_stoch_beta <- ls_stoch_result$par[1]
+ls_stoch_gamma <- ls_stoch_result$par[2]
+
+cat("least squares results (stochastic sir):\n")
+cat(paste("  β =", round(ls_stoch_beta, 4), "\n"))
+cat(paste("  γ =", round(ls_stoch_gamma, 4), "\n"))
+cat(paste("  R0 =", round(ls_stoch_beta/ls_stoch_gamma, 2), "\n\n"))
+
+#method 2: bootstrap (stochastic sir) 
+cat("running bootstrap fitting (stochastic sir model)...\n")
+
+bootstrap_stoch_results <- matrix(NA, nrow = n_bootstrap, ncol = 2)
+colnames(bootstrap_stoch_results) <- c("beta", "gamma")
+
+set.seed(123)
+for(i in 1:n_bootstrap) {
+  #print(i)
+  #bootstrap resampling
+  sample_indices <- sample(1:nrow(measles_data), replace = TRUE)
+  bootstrap_data <- measles_data[sample_indices, ]
+  bootstrap_data <- bootstrap_data[order(bootstrap_data$biweek), ]
+  
+  #fit stochastic sir to resampled data
+  bootstrap_stoch_objective <- function(params) {
+    if(any(params <= 0)) return(1e10)
+    
+    tryCatch({
+      predicted_I <- simulate_stoch_SIR_average(beta = params[1], gamma = params[2], 
+                                                time_points = bootstrap_data$biweek,
+                                                n_sims = 50, N = N)  #reduce simulation count to speed up
+      residuals <- (bootstrap_data$measles - predicted_I)^2
+      return(sum(residuals, na.rm = TRUE))
+    }, error = function(e) return(1e10))
+  }
+  
+  tryCatch({
+    bs_stoch_fit <- optim(par = c(initial_beta_stoch, initial_gamma_stoch), 
+                          fn = bootstrap_stoch_objective, 
+                          method = "L-BFGS-B", 
+                          lower = c(0.001, 0.001),
+                          upper = c(2, 2))
+    
+    if(any(as.numeric(bs_stoch_fit$par) > 5)) {
+      bootstrap_stoch_results[i, ] <- c(NA, NA)
+    } else {
+      bootstrap_stoch_results[i, ] <- bs_stoch_fit$par
+    }
+    
+  }, error = function(e) {
+    bootstrap_stoch_results[i, ] <- c(NA, NA)
+  })
+  
+  if(i %% 100 == 0) cat(paste("bootstrap progress:", i, "/", n_bootstrap, "\n"))
+}
+
+#calculate bootstrap statistics
+valid_bs_stoch <- complete.cases(bootstrap_stoch_results)
+valid_bootstrap_stoch <- bootstrap_stoch_results[valid_bs_stoch, ]
+
+bs_stoch_beta_mean <- mean(valid_bootstrap_stoch[, "beta"])
+bs_stoch_gamma_mean <- mean(valid_bootstrap_stoch[, "gamma"])
+bs_stoch_beta_ci <- quantile(valid_bootstrap_stoch[, "beta"], c(0.025, 0.975))
+bs_stoch_gamma_ci <- quantile(valid_bootstrap_stoch[, "gamma"], c(0.025, 0.975))
+
+cat("bootstrap results (stochastic sir):\n")
+cat(paste("  β =", round(bs_stoch_beta_mean, 4), 
+          ", 95% CI: [", round(bs_stoch_beta_ci[1], 4), ",", round(bs_stoch_beta_ci[2], 4), "]\n"))
+cat(paste("  γ =", round(bs_stoch_gamma_mean, 4), 
+          ", 95% CI: [", round(bs_stoch_gamma_ci[1], 4), ",", round(bs_stoch_gamma_ci[2], 4), "]\n"))
+cat(paste("  R0 =", round(bs_stoch_beta_mean/bs_stoch_gamma_mean, 2), "\n\n"))
+
+#stochastic sir results comparison table 
+comparison_stoch_table <- data.frame(
+  Method = c("Least Squares(Stochastic)", "Bootstrap(Stochastic)"),
+  Beta_Estimate = c(ls_stoch_beta, bs_stoch_beta_mean),
+  Beta_Lower = c(NA, bs_stoch_beta_ci[1]),
+  Beta_Upper = c(NA, bs_stoch_beta_ci[2]),
+  Gamma_Estimate = c(ls_stoch_gamma, bs_stoch_gamma_mean),
+  Gamma_Lower = c(NA, bs_stoch_gamma_ci[1]),
+  Gamma_Upper = c(NA, bs_stoch_gamma_ci[2]),
+  R0 = c(ls_stoch_beta/ls_stoch_gamma, bs_stoch_beta_mean/bs_stoch_gamma_mean)
+)
+
+cat("=== stochastic sir model parameter estimation results comparison ===\n")
+print(comparison_stoch_table)
+
+#visualization results (stochastic sir) 
+
+#1. generate prediction data for plotting
+time_seq <- seq(min(measles_data$biweek), max(measles_data$biweek), length.out = 50)
+
+#least squares prediction (stochastic sir)
+ls_stoch_pred <- simulate_stoch_SIR_average(beta = ls_stoch_beta, gamma = ls_stoch_gamma, 
+                                            time_points = time_seq, n_sims = 100, N = N)
+ls_stoch_df <- data.frame(time = time_seq, I = ls_stoch_pred, method = "Least Squares(Stochastic)")
+
+#bootstrap prediction (stochastic sir)
+bs_stoch_pred <- simulate_stoch_SIR_average(beta = bs_stoch_beta_mean, gamma = bs_stoch_gamma_mean, 
+                                            time_points = time_seq, n_sims = 100, N = N)
+bs_stoch_df <- data.frame(time = time_seq, I = bs_stoch_pred, method = "Bootstrap(Stochastic)")
+
+#combine prediction data
+all_stoch_predictions <- rbind(ls_stoch_df, bs_stoch_df)
+
+#2. stochastic sir fitting results comparison plot
+stoch_fit_plot <- ggplot() +
+  geom_point(data = measles_data, aes(x = biweek, y = measles), 
+             color = "black", size = 2.5, alpha = 0.8) +
+  geom_line(data = all_stoch_predictions, aes(x = time, y = I, color = method, linetype = method), 
+            size = 1.2) +
+  scale_color_manual(values = c("Least Squares(Stochastic)" = "red", 
+                                "Bootstrap(Stochastic)" = "blue")) +
+  scale_linetype_manual(values = c("Least Squares(Stochastic)" = "solid", 
+                                   "Bootstrap(Stochastic)" = "dashed")) +
+  labs(title = "Measles Stochastic SIR Model: Comparison of Two Fitting Methods", 
+       x = "Biweek", y = "Measles Cases",
+       color = "Fitting Method", linetype = "Fitting Method") +
+  theme_minimal() +
+  theme(text = element_text(size = 12),
+        legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5))
+
+print(stoch_fit_plot)
+
+#3. bootstrap parameter distribution plots (stochastic sir)
+bs_stoch_plot1 <- ggplot(data.frame(beta = valid_bootstrap_stoch[, "beta"]), aes(x = beta)) +
+  geom_histogram(bins = 30, fill = "lightblue", alpha = 0.7, color = "black") +
+  geom_vline(xintercept = bs_stoch_beta_mean, color = "red", linetype = "dashed", size = 1) +
+  labs(title = "Bootstrap(Stochastic SIR): β Parameter Distribution", x = "β", y = "Frequency") +
+  theme_minimal()
+
+bs_stoch_plot2 <- ggplot(data.frame(gamma = valid_bootstrap_stoch[, "gamma"]), aes(x = gamma)) +
+  geom_histogram(bins = 30, fill = "lightgreen", alpha = 0.7, color = "black") +
+  geom_vline(xintercept = bs_stoch_gamma_mean, color = "red", linetype = "dashed", size = 1) +
+  labs(title = "Bootstrap(Stochastic SIR): γ Parameter Distribution", x = "γ", y = "Frequency") +
+  theme_minimal()
+
+#combine stochastic sir diagnostic plots
+stoch_diagnostic_plots <- grid.arrange(bs_stoch_plot1, bs_stoch_plot2, ncol = 2, nrow = 1)
+
+
+#analysis 2: covid-19 data
+
+
+#johns hopkins github data link
+jhu_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv"
+
+#set us population
+US_POPULATION <- 331000000  #2021 us population estimate
+jhu_data <- read_csv(jhu_url, show_col_types = FALSE)
+
+#data processing - estimate active infections
+covid_processed <- jhu_data %>%
+  select(-c(UID, iso2, iso3, code3, FIPS, Admin2, Province_State, 
+            Country_Region, Lat, Long_, Combined_Key)) %>%
+  #only pivot date columns
+  pivot_longer(cols = matches("^\\d+/\\d+/\\d+$"), names_to = "Date", values_to = "Cumulative_Cases") %>%
+  mutate(Date = mdy(Date)) %>%
+  group_by(Date) %>%
+  summarise(Cumulative_Cases = sum(Cumulative_Cases, na.rm = TRUE), .groups = 'drop') %>%
+  arrange(Date) %>%
+  mutate(Daily_New_Cases = Cumulative_Cases - lag(Cumulative_Cases, default = 0)) %>%
+  filter(Daily_New_Cases >= 0, Date >= as.Date("2020-01-22")) %>%
+  #estimate active infections (assume average infection period of 14 days)
+  mutate(
+    #use 14-day rolling window to calculate active infections
+    Active_Cases = zoo::rollsum(Daily_New_Cases, k = 14, fill = NA, align = "right")
+  ) %>%
+  filter(!is.na(Active_Cases))
+
+#aggregate active infections by 14-day periods
+covid_data <- covid_processed %>%
+  mutate(
+    Days_Since_Start = as.numeric(Date - min(Date)),
+    Biweek_Group = floor(Days_Since_Start / 14)
+  ) %>%
+  group_by(Biweek_Group) %>%
+  summarise(
+    Start_Date = min(Date),
+    End_Date = max(Date),
+    #use average active infections within biweek
+    cases = round(mean(Active_Cases, na.rm = TRUE)/10000),
+    .groups = 'drop'
+  ) %>%
+  filter(Biweek_Group >= 0, cases > 0) %>%
+  mutate(biweek = Biweek_Group + 1) %>%
+  select(biweek, cases, Start_Date, End_Date) %>%
+  arrange(biweek) %>%
+  filter(biweek <= 35)
+
+#user parameter settings
+N <- 33100  #total population (in 10,000s)
+initial_beta_stoch <- 2    #initial transmission rate for stochastic model
+initial_gamma_stoch <- 0.1 #initial recovery rate for stochastic model
+
+#bootstrap parameters
+n_bootstrap <- 400
+n_simulations <- 100  #number of stochastic simulations per fitting
+
+#method 1: least squares (stochastic sir) 
+cat("running least squares fitting (stochastic sir model)...\n")
+
+#objective function: calculate sum of squared residuals between stochastic model predictions and observations
+ls_stoch_objective <- function(params) {
+  if(any(params <= 0)) return(1e10)  #ensure parameters are positive
+  
+  tryCatch({
+    #use stochastic sir simulation
+    predicted_I <- simulate_stoch_SIR_average(beta = params[1], gamma = params[2], 
+                                              time_points = covid_data$biweek, n_sims = n_simulations, N = N)
+    
+    #calculate sum of squared residuals
+    residuals <- (covid_data$cases - predicted_I)^2
+    return(sum(residuals, na.rm = TRUE))
+  }, error = function(e) return(1e10))
+}
+
+#use optim function for minimization
+ls_stoch_result <- optim(par = c(initial_beta_stoch, initial_gamma_stoch), 
+                         fn = ls_stoch_objective, 
+                         method = "L-BFGS-B", 
+                         lower = c(0.001, 0.001))
+
+ls_stoch_beta <- ls_stoch_result$par[1]
+ls_stoch_gamma <- ls_stoch_result$par[2]
+
+cat("least squares results (stochastic sir):\n")
+cat(paste("  β =", round(ls_stoch_beta, 4), "\n"))
+cat(paste("  γ =", round(ls_stoch_gamma, 4), "\n"))
+cat(paste("  R0 =", round(ls_stoch_beta/ls_stoch_gamma, 2), "\n\n"))
+
+#method 2: bootstrap (stochastic sir) 
+cat("running bootstrap fitting (stochastic sir model)...\n")
+
+bootstrap_stoch_results <- matrix(NA, nrow = n_bootstrap, ncol = 2)
+colnames(bootstrap_stoch_results) <- c("beta", "gamma")
+
+set.seed(123)
+for(i in 1:n_bootstrap) {
+  #bootstrap resampling
+  sample_indices <- sample(1:nrow(covid_data), replace = TRUE)
+  bootstrap_data <- covid_data[sample_indices, ]
+  bootstrap_data <- bootstrap_data[order(bootstrap_data$biweek), ]
+  
+  #fit stochastic sir to resampled data
+  bootstrap_stoch_objective <- function(params) {
+    if(any(params <= 0)) return(1e10)
+    
+    tryCatch({
+      predicted_I <- simulate_stoch_SIR_average(beta = params[1], gamma = params[2], 
+                                                time_points = bootstrap_data$biweek,
+                                                n_sims = n_simulations, N = N)  #reduce simulation count to speed up
+      residuals <- (bootstrap_data$cases - predicted_I)^2
+      return(sum(residuals, na.rm = TRUE))
+    }, error = function(e) return(1e10))
+  }
+  
+  tryCatch({
+    bs_stoch_fit <- optim(par = c(initial_beta_stoch, initial_gamma_stoch), 
+                          fn = bootstrap_stoch_objective, 
+                          method = "L-BFGS-B", 
+                          lower = c(0.001, 0.001))
+    
+    if(any(as.numeric(bs_stoch_fit$par) > 5)) {
+      bootstrap_stoch_results[i, ] <- c(NA, NA)
+    } else {
+      bootstrap_stoch_results[i, ] <- bs_stoch_fit$par
+    }
+    
+  }, error = function(e) {
+    bootstrap_stoch_results[i, ] <- c(NA, NA)
+  })
+  
+  if(i %% 50 == 0) cat(paste("bootstrap progress:", i, "/", n_bootstrap, "\n"))
+}
+
+#calculate bootstrap statistics
+valid_bs_stoch <- complete.cases(bootstrap_stoch_results)
+valid_bootstrap_stoch <- bootstrap_stoch_results[valid_bs_stoch, ]
+
+bs_stoch_beta_mean <- mean(valid_bootstrap_stoch[, "beta"])
+bs_stoch_gamma_mean <- mean(valid_bootstrap_stoch[, "gamma"])
+bs_stoch_beta_ci <- quantile(valid_bootstrap_stoch[, "beta"], c(0.025, 0.975))
+bs_stoch_gamma_ci <- quantile(valid_bootstrap_stoch[, "gamma"], c(0.025, 0.975))
+
+cat("bootstrap results (stochastic sir):\n")
+cat(paste("  β =", round(bs_stoch_beta_mean, 4), 
+          ", 95% CI: [", round(bs_stoch_beta_ci[1], 4), ",", round(bs_stoch_beta_ci[2], 4), "]\n"))
+cat(paste("  γ =", round(bs_stoch_gamma_mean, 4), 
+          ", 95% CI: [", round(bs_stoch_gamma_ci[1], 4), ",", round(bs_stoch_gamma_ci[2], 4), "]\n"))
+cat(paste("  R0 =", round(bs_stoch_beta_mean/bs_stoch_gamma_mean, 2), "\n\n"))
+
+#results comparison table 
+comparison_stoch_table <- data.frame(
+  Method = c("Least Squares(Stochastic)", "Bootstrap(Stochastic)"),
+  Beta_Estimate = c(ls_stoch_beta, bs_stoch_beta_mean),
+  Beta_Lower = c(NA, bs_stoch_beta_ci[1]),
+  Beta_Upper = c(NA, bs_stoch_beta_ci[2]),
+  Gamma_Estimate = c(ls_stoch_gamma, bs_stoch_gamma_mean),
+  Gamma_Lower = c(NA, bs_stoch_gamma_ci[1]),
+  Gamma_Upper = c(NA, bs_stoch_gamma_ci[2]),
+  R0 = c(ls_stoch_beta/ls_stoch_gamma, bs_stoch_beta_mean/bs_stoch_gamma_mean)
+)
+
+cat("=== two methods parameter estimation results comparison (stochastic sir) ===\n")
+print(comparison_stoch_table)
+
+#visualization results 
+
+#1. generate prediction data for plotting
+time_seq <- seq(min(covid_data$biweek), max(covid_data$biweek), length.out = 50)
+
+#least squares prediction (stochastic sir)
+ls_stoch_pred <- simulate_stoch_SIR_average(beta = ls_stoch_beta, gamma = ls_stoch_gamma, 
+                                            time_points = time_seq, n_sims = 100, N = N)
+ls_stoch_df <- data.frame(time = time_seq, I = ls_stoch_pred, method = "Least Squares(Stochastic)")
+
+#bootstrap prediction (stochastic sir)
+bs_stoch_pred <- simulate_stoch_SIR_average(beta = bs_stoch_beta_mean, gamma = bs_stoch_gamma_mean, 
+                                            time_points = time_seq, n_sims = 100, N = N)
+bs_stoch_df <- data.frame(time = time_seq, I = bs_stoch_pred, method = "Bootstrap(Stochastic)")
+
+#combine prediction data
+all_stoch_predictions <- rbind(ls_stoch_df, bs_stoch_df)
+
+#2. stochastic sir fitting results comparison plot
+stoch_fit_plot <- ggplot() +
+  geom_point(data = covid_data, aes(x = biweek, y = cases), 
+             color = "black", size = 2.5, alpha = 0.8) +
+  geom_line(data = all_stoch_predictions, aes(x = time, y = I, color = method, linetype = method), 
+            size = 1.2) +
+  scale_color_manual(values = c("Least Squares(Stochastic)" = "red", 
+                                "Bootstrap(Stochastic)" = "blue")) +
+  scale_linetype_manual(values = c("Least Squares(Stochastic)" = "solid", 
+                                   "Bootstrap(Stochastic)" = "dashed")) +
+  labs(title = "COVID-19 Stochastic SIR Model: Two Fitting Methods Results Comparison", 
+       x = "Biweek", y = "COVID-19 Cases (×10,000)",
+       color = "Fitting Method", linetype = "Fitting Method") +
+  theme_minimal() +
+  theme(text = element_text(size = 12),
+        legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5))
+
+print(stoch_fit_plot)
+
+#3. bootstrap parameter distribution plots
+bs_stoch_plot1 <- ggplot(data.frame(beta = valid_bootstrap_stoch[, "beta"]), aes(x = beta)) +
+  geom_histogram(bins = 30, fill = "lightblue", alpha = 0.7, color = "black") +
+  geom_vline(xintercept = bs_stoch_beta_mean, color = "red", linetype = "dashed", size = 1) +
+  labs(title = "Bootstrap(Stochastic SIR): β Parameter Distribution", x = "β", y = "Frequency") +
+  theme_minimal()
+
+bs_stoch_plot2 <- ggplot(data.frame(gamma = valid_bootstrap_stoch[, "gamma"]), aes(x = gamma)) +
+  geom_histogram(bins = 30, fill = "lightgreen", alpha = 0.7, color = "black") +
+  geom_vline(xintercept = bs_stoch_gamma_mean, color = "red", linetype = "dashed", size = 1) +
+  labs(title = "Bootstrap(Stochastic SIR): γ Parameter Distribution", x = "γ", y = "Frequency") +
+  theme_minimal()
+
+#combine bootstrap diagnostic plots
+stoch_diagnostic_plots <- grid.arrange(bs_stoch_plot1, bs_stoch_plot2, ncol = 2, nrow = 1)
+

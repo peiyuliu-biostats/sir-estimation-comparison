@@ -1,0 +1,11 @@
+# History files
+.Rhistory
+.Rapp.history
+
+.RData
+
+.Ruserdata
+
+.rstudio-prefs
+
+rsconnect/

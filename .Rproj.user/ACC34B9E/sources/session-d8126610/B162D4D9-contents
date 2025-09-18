@@ -1,0 +1,108 @@
+
+
+```markdown
+---
+title: "Model Description for the SIR Estimation App"
+author: " "
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: paper
+    toc: true
+    toc_float: true
+---
+
+# Overview
+
+This document describes the underlying models and statistical methods used in the "SIR Model Estimation" Shiny application. The primary goal of this project is to compare the performance of different parameter estimation techniques when applied to two distinct types of epidemiological models: a **Deterministic SIR Model** and a **Stochastic SIR Model**.
+
+The analysis is performed on two real-world datasets:
+1.  **Measles Data**: A classic dataset of measles cases in Niamey, Niger.
+2.  **COVID-19 Data**: Aggregated data of active COVID-19 cases in the United States during the early phase of the pandemic.
+
+This report will detail the mathematical formulation of each model, the fitting procedures employed, and present the final results for both datasets.
+
+---
+
+# 1. The Deterministic SIR Model (ODE)
+
+The deterministic Susceptible-Infected-Recovered (SIR) model is a cornerstone of mathematical epidemiology. It describes the flow of individuals between three compartments using a set of Ordinary Differential Equations (ODEs). This model assumes a large, well-mixed population where randomness can be averaged out.
+
+### Model Equations
+
+The dynamics of the system are governed by the following equations:
+
+$$
+\frac{dS}{dt} = -\beta \frac{S \cdot I}{N}
+$$
+$$
+\frac{dI}{dt} = \beta \frac{S \cdot I}{N} - \gamma I
+$$
+$$
+\frac{dR}{dt} = \gamma I
+$$
+
+Where:
+-   **S(t)**: Number of susceptible individuals at time t.
+-   **I(t)**: Number of infected individuals at time t.
+-   **R(t)**: Number of recovered (and immune) individuals at time t.
+-   **N**: Total population size (N = S + I + R, assumed constant).
+-   **β (beta)**: The transmission rate. It represents the average number of contacts per person per time, multiplied by the probability of disease transmission in a contact between a susceptible and an infectious subject.
+-   **γ (gamma)**: The recovery rate. It is the inverse of the infectious period (i.e., $\gamma = 1 / D$, where D is the average duration of infection).
+
+The basic reproduction number, $R_0 = \beta / \gamma$, represents the average number of secondary infections produced by a single infected individual in a completely susceptible population.
+
+### Parameter Estimation Methods
+
+The Shiny application implements three distinct methods to estimate the parameters $\beta$ and $\gamma$ from the observed case data.
+
+1.  **Least Squares (LS)**: This is the simplest method. It uses an optimization algorithm (`L-BFGS-B`) to find the parameter values $(\beta, \gamma)$ that minimize the sum of squared differences between the model's predicted number of infected individuals, $I(t)$, and the observed case counts.
+
+2.  **Bootstrap**: This method assesses the uncertainty in the parameter estimates. It involves repeatedly resampling the original dataset (with replacement) to create many new, slightly different datasets. The LS method is then applied to each of these new datasets. The distribution of the resulting parameter estimates provides a measure of their stability and is used to calculate confidence intervals.
+
+3.  **Metropolis-Hastings (MCMC)**: This is a Bayesian approach. It aims to find the entire posterior probability distribution of the parameters, given the data. It starts with an initial guess and "walks" randomly through the parameter space, preferentially moving towards regions of higher likelihood. The collection of points from this "walk" (the Markov chain) forms the posterior distribution, from which we can calculate means and credible intervals.
+
+
+
+# 2. The Stochastic SIR Model
+
+While the deterministic model describes the average behavior of a large population, the **Stochastic SIR Model** captures the inherent randomness and chance in disease transmission, especially in smaller populations. Instead of smooth flows, it models individual infection and recovery events.
+
+### The Gillespie Algorithm
+
+Our stochastic model is implemented using the Gillespie Direct Method, an event-based algorithm. The core idea is:
+
+1.  **Define Events and Rates**: At any given moment, there are two possible events that can happen:
+    -   An **Infection**: A susceptible person becomes infected. The rate of this event is $\lambda_{inf} = \beta \frac{S \cdot I}{N}$.
+    -   A **Recovery**: An infected person recovers. The rate of this event is $\lambda_{rec} = \gamma I$.
+    The total rate of any event happening is $\lambda_{total} = \lambda_{inf} + \lambda_{rec}$.
+
+2.  **Simulate Time to Next Event**: The time until the *next* event occurs is not fixed; it is a random variable drawn from an exponential distribution with a rate equal to the total event rate, $\lambda_{total}$.
+    $$
+    \Delta t \sim \text{Exponential}(\lambda_{total})
+    $$
+
+3.  **Simulate Which Event Occurs**: Once we know *when* the next event happens, we need to decide *which* event it is. The probability of it being an infection is proportional to its rate: $P(\text{Infection}) = \lambda_{inf} / \lambda_{total}$.
+
+4.  **Update State and Repeat**: The system time is advanced by $\Delta t$, the number of S, I, and R individuals is updated based on the event that occurred, and the process repeats until the epidemic ends (I=0) or the maximum simulation time is reached.
+
+Because this model is random, running it once gives only one possible trajectory. To get a stable prediction, we must run it many times (e.g., 100 simulations) and average the number of infected individuals at each time point.
+
+### Parameter Estimation Methods
+
+For the stochastic model, we use the average of multiple simulations as the prediction and fit the parameters using Least Squares and Bootstrap, similar to the deterministic case. The MCMC method is computationally too intensive for this event-based model and is omitted.
+
+### Fitting Results (Stochastic Model)
+
+You can review the full analysis with fitting results in this html file: 
+
+---
+
+# 3. Model Comparison and Conclusion
+
+-   **Deterministic Model**: It's computationally fast and provides a good overview of the epidemic's average trend. It is well-suited for large populations where random fluctuations are minimal. The variety of fitting methods available (LS, Bootstrap, MCMC) allows for a deep analysis of parameter uncertainty.
+
+-   **Stochastic Model**: It provides a more realistic simulation of disease spread by modeling individual chance events. This is particularly important for smaller populations or when studying the probability of epidemic fade-out. However, it is computationally intensive, as it requires averaging many simulations for a stable prediction, making methods like MCMC impractical.
+
+ 
+```

@@ -1,0 +1,111 @@
+---
+title: "Model Description for the Trial Comparison App"
+author: "Peiyu Liu, Department of Biostatistics, University of Florida"
+date:  
+output:
+  html_document:
+    theme: paper
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Overview
+
+This application provides an interactive platform to simulate and compare two distinct clinical trial designs for evaluating vector-control interventions. The core objective is to contrast the statistical power and required sample sizes of a novel serological endpoint (based on anti-MSP antibodies) against a traditional clinical endpoint (based on dengue infection).
+
+The app is built upon two underlying mechanistic models:
+
+1.  The MSP Antibody-based Model (Trial 1): A stochastic model that simulates how an individual's antibody levels change over time in response to seasonal mosquito bites.
+2.  The Infection-based Model (Trial 2): A simplified epidemiological model that calculates the risk of clinical infection based on the same seasonal biting pattern.
+
+By adjusting the parameters in the sidebar, you can explore how different immunological, epidemiological, and trial design assumptions influence the efficiency of each approach.
+
+---
+
+# 1. The MSP Antibody-based Trial Model
+
+This model simulates the dynamics of antibodies against mosquito salivary protein (MSP). It assumes that each mosquito bite acts as a small "immunological boost" and the total antibody level is the cumulative result of all past bites, balanced by natural decay.
+
+### Biting Rate ($\lambda(t)$)
+
+The foundation of the model is a seasonal mosquito biting rate. We assume the number of bites a person receives per day follows a sinusoidal pattern over a year. You control this pattern with two parameters:
+
+-   **`λ_max`:** The biting rate at the peak of the mosquito season.
+-   **`λ_min`:** The biting rate at the trough of the season.
+
+The app uses these to define a continuous daily biting rate, $\lambda(t)$, which drives the simulation.
+
+$$
+\lambda(t) = \lambda_0 + \lambda_{amp} \sin(\omega t)
+$$
+
+where $\lambda_0 = (\lambda_{max} + \lambda_{min})/2$ is the average rate and $\lambda_{amp} = (\lambda_{max} - \lambda_{min})/2$ is the seasonal amplitude.
+
+### Antibody Impulse Response and Decay
+
+The model is based on three key immunological processes:
+
+1.  Impulse Magnitude (`C`): Each mosquito bite at time $T_j$ is assumed to provide an instantaneous "boost" or increase in the antibody level. The size of this boost, $C$, is not the same for every bite or person. You control the distribution of these boosts with:
+    -   **`μ_c`:** The average magnitude of the antibody boost from a single bite.
+    -   **`prop_c`:** A parameter controlling the variability of the boost (specifically, the variance-to-mean ratio). Higher values mean more heterogeneity in the immune response across the population.
+
+2.  Antibody Decay (`γ`): Antibodies are not permanent. After a boost, they are cleared from the body over time. We model this as an exponential decay process. You control the speed of this decay with:
+    -   **`Half-life`:** The number of days it takes for the antibody level from a single bite to decrease by 50%. A shorter half-life means the "memory" of past bites fades more quickly.
+
+3.  Baseline and Noise:
+    -   **`B0`:** Represents a pre-existing baseline antibody level before the trial begins.
+    -   **`σ_ε`:** Represents random measurement error or noise inherent in lab assays for quantifying antibody levels.
+
+### How Sample Size is Calculated (Trial 1)
+
+The app uses the analytical formulas derived from the ANPP model (as described in the accompanying paper) to calculate the population mean and population variance of antibody levels over time for both a control group and an intervention group (where biting is reduced by a factor `θ`).
+
+The required sample size is then calculated using a standard two-sample t-test framework on the log-transformed antibody levels. It determines the number of participants needed in each group to detect the difference in mean antibody levels with the specified statistical power (`1-β`) and significance level (`α`).
+
+---
+
+# 2. The Infection-based Trial Model
+
+This model calculates the sample size for a traditional trial where the endpoint is the first documented clinical infection with dengue.
+
+### From Bites to Infection Hazard
+
+The daily risk of infection (the "hazard rate") is directly proportional to the seasonal biting rate, $\lambda(t)$, but is modified by several key probabilities that you control:
+
+-   `PV` (Prevalence of Infectious Vectors): The proportion of mosquitoes in the population that are carrying and able to transmit the dengue virus.
+-   `P_hv` (Transmission Probability): The probability that a bite from an infectious mosquito successfully transmits the virus to a human.
+-   `P_c` (Overall Probability): A composite parameter representing the overall probability that a single random bite from any mosquito (infectious or not) will result in a human infection. This integrates the parameters above.
+
+The daily infection hazard is essentially:
+$$
+\text{Hazard}(t) = \lambda(t) \times (\text{Probability of infection per bite})
+$$
+
+### Cumulative Incidence
+
+The app integrates this daily hazard over the trial duration (`T`) to calculate the cumulative incidence. This is the total proportion of a susceptible population that is expected to become infected by a certain day.
+
+-   `Ps` (Proportion Susceptible): The percentage of the trial population that is susceptible to dengue at the start of the trial.
+
+### How Sample Size is Calculated (Trial 2)
+
+The sample size calculation for this trial is based on comparing the cumulative infection risk between the control and intervention groups. The app uses a standard method for time-to-event data based on the Average Hazard Ratio (AHR).
+
+1.  It first calculates the AHR, which is the ratio of the total infection risk in the intervention group to the total risk in the control group over the trial duration. For a simple reduction in biting, `AHR = θ`.
+2.  It then uses Freedman's formula to calculate the total number of infection events needed to detect this AHR with the specified power (`1-β`) and significance (`α`).
+3.  Finally, it converts this number of events into a total number of participants by dividing by the average cumulative incidence across the two trial arms. A low incidence rate means a very large number of participants are needed to observe the required number of events.
+
+---
+
+# 3. Common Parameters
+
+These parameters define the overall trial design and are applied to both models to ensure a fair comparison.
+
+-   `T` (Trial Duration): The total length of the trial in days.
+-   `θ` (Intervention Efficacy): The fractional reduction in the mosquito biting rate caused by the intervention. For example, `θ = 0.5` represents a 50% reduction in bites.
+-   `α` (Type I Error): The probability of a false positive (concluding the intervention is effective when it is not). This is also known as the significance level.
+-   `1-β` (Power): The probability of a true positive (correctly concluding the intervention is effective when it truly is).

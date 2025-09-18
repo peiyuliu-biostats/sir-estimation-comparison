@@ -1,0 +1,452 @@
+#Analysis of Three Fitting Methods for SIR Models (Measles & COVID-19)
+#Bootstrap + Metropolis-Hastings + Least Squares
+
+library(deSolve)    
+library(ggplot2)  
+library(dplyr)    
+library(gridExtra)  
+library(showtext)
+library(readr)
+library(tidyr)
+library(lubridate)
+library(zoo)
+showtext_auto()
+
+
+#SIR model differential equations
+sir_model <- function(time, state, parameters) {
+  with(as.list(c(state, parameters)), {
+    N_total <- S + I + R  #Total population
+    dS <- -beta * S * I / N_total           #Rate of change for susceptible
+    dI <- beta * S * I / N_total - gamma * I  #Rate of change for infected
+    dR <- gamma * I                          #Rate of change for recovered
+    list(c(dS, dI, dR))
+  })
+}
+
+#Least Squares fitting function
+fit_least_squares <- function(data, N, initial_beta = 0.2, initial_gamma = 0.1, case_col = "cases") {
+  ls_objective <- function(params) {
+    if(any(params <= 0)) return(1e10)  #Ensure parameters are positive
+    
+    #Initial conditions
+    init <- c(S = N - 1, I = 1, R = 0)
+    
+    #Solve ODE
+    tryCatch({
+      sol <- ode(y = init, times = data$biweek, func = sir_model, 
+                 parms = list(beta = params[1], gamma = params[2]))
+      
+      #Calculate sum of squared residuals
+      predicted_I <- sol[, "I"]
+      residuals <- (data[[case_col]] - predicted_I)^2
+      return(sum(residuals, na.rm = TRUE))
+    }, error = function(e) return(1e10))
+  }
+  
+  #Use optim function for minimization
+  result <- optim(par = c(initial_beta, initial_gamma), 
+                  fn = ls_objective, 
+                  method = "L-BFGS-B", 
+                  lower = c(0.001, 0.001))
+  
+  return(list(beta = result$par[1], gamma = result$par[2]))
+}
+
+#Bootstrap fitting function
+fit_bootstrap <- function(data, N, n_bootstrap = 500, initial_beta = 0.2, initial_gamma = 0.1, case_col = "cases") {
+  bootstrap_results <- matrix(NA, nrow = n_bootstrap, ncol = 2)
+  colnames(bootstrap_results) <- c("beta", "gamma")
+  
+  set.seed(123)
+  for(i in 1:n_bootstrap) {
+    #Bootstrap resampling
+    sample_indices <- sample(1:nrow(data), replace = TRUE)
+    bootstrap_data <- data[sample_indices, ]
+    bootstrap_data <- bootstrap_data[order(bootstrap_data$biweek), ]
+    
+    #Perform least squares fitting on resampled data
+    bootstrap_objective <- function(params) {
+      if(any(params <= 0)) return(1e10)
+      
+      init <- c(S = N - 1, I = 1, R = 0)
+      
+      tryCatch({
+        sol <- ode(y = init, times = bootstrap_data$biweek, func = sir_model, 
+                   parms = list(beta = params[1], gamma = params[2]))
+        predicted_I <- sol[, "I"]
+        residuals <- (bootstrap_data[[case_col]] - predicted_I)^2
+        return(sum(residuals, na.rm = TRUE))
+      }, error = function(e) return(1e10))
+    }
+    
+    tryCatch({
+      bs_fit <- optim(par = c(initial_beta, initial_gamma), 
+                      fn = bootstrap_objective, 
+                      method = "L-BFGS-B", 
+                      lower = c(0.001, 0.001))
+      
+      #Filter out unrealistic parameter values
+      if(any(bs_fit$par > 10)) {
+        bootstrap_results[i, ] <- c(NA, NA)
+      } else {
+        bootstrap_results[i, ] <- bs_fit$par
+      }
+    }, error = function(e) {
+      bootstrap_results[i, ] <- c(NA, NA)
+    })
+    
+    if(i %% 50 == 0) cat(paste("Bootstrap progress:", i, "/", n_bootstrap, "\n"))
+  }
+  
+  #Calculate Bootstrap statistics
+  valid_bs <- complete.cases(bootstrap_results)
+  valid_bootstrap <- bootstrap_results[valid_bs, ]
+  
+  return(list(
+    results = valid_bootstrap,
+    beta_mean = mean(valid_bootstrap[, "beta"]),
+    gamma_mean = mean(valid_bootstrap[, "gamma"]),
+    beta_ci = quantile(valid_bootstrap[, "beta"], c(0.025, 0.975)),
+    gamma_ci = quantile(valid_bootstrap[, "gamma"], c(0.025, 0.975))
+  ))
+}
+
+#Metropolis-Hastings fitting function
+fit_metropolis_hastings <- function(data, N, n_iterations = 10000, burnin = 3000, 
+                                    initial_beta = 0.2, initial_gamma = 0.1, 
+                                    proposal_sd = c(0.01, 0.01), case_col = "cases") {
+  
+  #Log-likelihood function (using Poisson distribution)
+  mh_log_likelihood <- function(params) {
+    if(any(params <= 0)) return(-Inf)
+    
+    init <- c(S = N - 1, I = 1, R = 0)
+    
+    tryCatch({
+      sol <- ode(y = init, times = data$biweek, func = sir_model, 
+                 parms = list(beta = params[1], gamma = params[2]))
+      predicted_I <- sol[, "I"]
+      
+      if(any(predicted_I <= 0)) {
+        return(-Inf)
+      }
+      
+      #Calculate log-likelihood
+      log_lik <- sum(dpois(data[[case_col]], lambda = pmax(predicted_I, 0.1), log = TRUE), na.rm = TRUE)
+      return(log_lik)
+    }, error = function(e) {
+      return(-Inf)
+    })
+  }
+  
+  #MH sampling
+  mh_chain <- matrix(NA, nrow = n_iterations, ncol = 3)
+  colnames(mh_chain) <- c("beta", "gamma", "log_posterior")
+  
+  #Initial values
+  current_params <- c(initial_beta, initial_gamma)
+  current_posterior <- mh_log_likelihood(current_params)
+  mh_chain[1, ] <- c(current_params, current_posterior)
+  
+  accepted <- 0
+  set.seed(456)
+  
+  for(i in 2:n_iterations) {
+    #New parameters (random walk)
+    proposed_params <- current_params + rnorm(2, 0, proposal_sd)
+    proposed_params <- pmax(proposed_params, 0)
+    proposed_posterior <- mh_log_likelihood(proposed_params)
+    
+    #Calculate acceptance probability
+    if(is.finite(proposed_posterior) && is.finite(current_posterior)) {
+      accept_prob <- exp(proposed_posterior - current_posterior)
+      if(runif(1) < accept_prob) {
+        current_params <- proposed_params
+        current_posterior <- proposed_posterior
+        accepted <- accepted + 1
+      }
+    }
+    
+    mh_chain[i, ] <- c(current_params, current_posterior)
+    
+    if(i %% 1000 == 0) cat(paste("MCMC progress:", i, "/", n_iterations, "\n"))
+  }
+  
+  #Remove burn-in period
+  final_chain <- mh_chain[(burnin + 1):n_iterations, ]
+  acceptance_rate <- accepted / n_iterations
+  
+  return(list(
+    chain = final_chain,
+    beta_mean = mean(final_chain[, "beta"]),
+    gamma_mean = mean(final_chain[, "gamma"]),
+    beta_ci = quantile(final_chain[, "beta"], c(0.025, 0.975)),
+    gamma_ci = quantile(final_chain[, "gamma"], c(0.025, 0.975)),
+    acceptance_rate = acceptance_rate
+  ))
+}
+
+#Function to create comparison plots
+create_comparison_plots <- function(data, predictions, data_name, case_col = "cases") {
+  #Fitting results comparison plot
+  fit_plot <- ggplot() +
+    geom_point(data = data, aes_string(x = "biweek", y = case_col), 
+               color = "black", size = 2.5, alpha = 0.8) +
+    geom_line(data = predictions, aes(x = time, y = I, color = method, linetype = method), 
+              size = 1.2) +
+    scale_color_manual(values = c("Least Squares" = "red", 
+                                  "Bootstrap" = "blue", 
+                                  "Metropolis-Hastings" = "green")) +
+    scale_linetype_manual(values = c("Least Squares" = "solid", 
+                                     "Bootstrap" = "dashed", 
+                                     "Metropolis-Hastings" = "dotted")) +
+    labs(title = paste(data_name, "SIR Model: Comparison of Three Fitting Methods"), 
+         x = "Biweek", y = paste(data_name, "Cases"),
+         color = "Fitting Method", linetype = "Fitting Method") +
+    theme_minimal() +
+    theme(text = element_text(size = 12),
+          legend.position = "bottom",
+          plot.title = element_text(hjust = 0.5))
+  
+  return(fit_plot)
+}
+
+#Function to create diagnostic plots
+create_diagnostic_plots <- function(bootstrap_results, mh_results) {
+  #Bootstrap distributions
+  bs_plot1 <- ggplot(data.frame(beta = bootstrap_results$results[, "beta"]), aes(x = beta)) +
+    geom_histogram(bins = 30, fill = "lightblue", alpha = 0.7, color = "black") +
+    geom_vline(xintercept = bootstrap_results$beta_mean, color = "red", linetype = "dashed", size = 1) +
+    labs(title = "Bootstrap: β Parameter Distribution", x = "β", y = "Frequency") +
+    theme_minimal()
+  
+  bs_plot2 <- ggplot(data.frame(gamma = bootstrap_results$results[, "gamma"]), aes(x = gamma)) +
+    geom_histogram(bins = 30, fill = "lightgreen", alpha = 0.7, color = "black") +
+    geom_vline(xintercept = bootstrap_results$gamma_mean, color = "red", linetype = "dashed", size = 1) +
+    labs(title = "Bootstrap: γ Parameter Distribution", x = "γ", y = "Frequency") +
+    theme_minimal()
+  
+  #MH chain trace plots
+  mh_trace1 <- ggplot(data.frame(iter = 1:nrow(mh_results$chain), beta = mh_results$chain[, "beta"]), 
+                      aes(x = iter, y = beta)) +
+    geom_line(color = "darkred") +
+    labs(title = "MH: β Parameter Trace", x = "Iteration", y = "β") +
+    theme_minimal()
+  
+  mh_trace2 <- ggplot(data.frame(iter = 1:nrow(mh_results$chain), gamma = mh_results$chain[, "gamma"]), 
+                      aes(x = iter, y = gamma)) +
+    geom_line(color = "darkgreen") +
+    labs(title = "MH: γ Parameter Trace", x = "Iteration", y = "γ") +
+    theme_minimal()
+  
+  #MH posterior distributions
+  mh_hist1 <- ggplot(data.frame(beta = mh_results$chain[, "beta"]), aes(x = beta)) +
+    geom_histogram(bins = 30, fill = "pink", alpha = 0.7, color = "black") +
+    geom_vline(xintercept = mh_results$beta_mean, color = "red", linetype = "dashed", size = 1) +
+    labs(title = "MH: β Posterior Distribution", x = "β", y = "Frequency") +
+    theme_minimal()
+  
+  mh_hist2 <- ggplot(data.frame(gamma = mh_results$chain[, "gamma"]), aes(x = gamma)) +
+    geom_histogram(bins = 30, fill = "lightcoral", alpha = 0.7, color = "black") +
+    geom_vline(xintercept = mh_results$gamma_mean, color = "red", linetype = "dashed", size = 1) +
+    labs(title = "MH: γ Posterior Distribution", x = "γ", y = "Frequency") +
+    theme_minimal()
+  
+  #Combine all diagnostic plots
+  return(grid.arrange(bs_plot1, bs_plot2, mh_trace1, mh_trace2, 
+                      mh_hist1, mh_hist2, ncol = 2, nrow = 3))
+}
+
+
+#MEASLES DATA ANALYSIS
+#Load and process measles data
+niamey <- read.csv("http://kingaa.github.io/clim-dis/parest/niamey.csv")
+measles_data <- niamey %>%
+  select(biweek, measles) %>%
+  arrange(biweek)
+
+#Parameters for measles
+N_measles <- 3500
+initial_beta_measles <- 0.2
+initial_gamma_measles <- 0.1
+
+#Fit models
+cat("Running Measles analysis...\n")
+measles_ls <- fit_least_squares(measles_data, N_measles, initial_beta_measles, initial_gamma_measles, "measles")
+measles_bs <- fit_bootstrap(measles_data, N_measles, 500, initial_beta_measles, initial_gamma_measles, "measles")
+measles_mh <- fit_metropolis_hastings(measles_data, N_measles, 10000, 3000, 
+                                      initial_beta_measles, initial_gamma_measles, c(0.01, 0.01), "measles")
+
+#Print results
+cat("Measles Results:\n")
+cat("Least Squares:\n")
+cat(paste("  β =", round(measles_ls$beta, 4), "\n"))
+cat(paste("  γ =", round(measles_ls$gamma, 4), "\n"))
+cat(paste("  R0 =", round(measles_ls$beta/measles_ls$gamma, 2), "\n\n"))
+
+cat("Bootstrap:\n")
+cat(paste("  β =", round(measles_bs$beta_mean, 4), 
+          ", 95% CI: [", round(measles_bs$beta_ci[1], 4), ",", round(measles_bs$beta_ci[2], 4), "]\n"))
+cat(paste("  γ =", round(measles_bs$gamma_mean, 4), 
+          ", 95% CI: [", round(measles_bs$gamma_ci[1], 4), ",", round(measles_bs$gamma_ci[2], 4), "]\n"))
+cat(paste("  R0 =", round(measles_bs$beta_mean/measles_bs$gamma_mean, 2), "\n\n"))
+
+cat("Metropolis-Hastings:\n")
+cat(paste("  β =", round(measles_mh$beta_mean, 4), 
+          ", 95% CI: [", round(measles_mh$beta_ci[1], 4), ",", round(measles_mh$beta_ci[2], 4), "]\n"))
+cat(paste("  γ =", round(measles_mh$gamma_mean, 4), 
+          ", 95% CI: [", round(measles_mh$gamma_ci[1], 4), ",", round(measles_mh$gamma_ci[2], 4), "]\n"))
+cat(paste("  R0 =", round(measles_mh$beta_mean/measles_mh$gamma_mean, 2), "\n"))
+cat(paste("  Acceptance rate:", round(measles_mh$acceptance_rate * 100, 1), "%\n\n"))
+
+#Create predictions for plotting
+time_seq_measles <- seq(min(measles_data$biweek), max(measles_data$biweek), length.out = 100)
+init_measles <- c(S = N_measles - measles_data$measles[1], I = measles_data$measles[1], R = 0)
+
+ls_pred_measles <- ode(y = init_measles, times = time_seq_measles, func = sir_model,
+                       parms = list(beta = measles_ls$beta, gamma = measles_ls$gamma))
+bs_pred_measles <- ode(y = init_measles, times = time_seq_measles, func = sir_model,
+                       parms = list(beta = measles_bs$beta_mean, gamma = measles_bs$gamma_mean))
+mh_pred_measles <- ode(y = init_measles, times = time_seq_measles, func = sir_model,
+                       parms = list(beta = measles_mh$beta_mean, gamma = measles_mh$gamma_mean))
+
+measles_predictions <- rbind(
+  data.frame(time = time_seq_measles, I = ls_pred_measles[, "I"], method = "Least Squares"),
+  data.frame(time = time_seq_measles, I = bs_pred_measles[, "I"], method = "Bootstrap"),
+  data.frame(time = time_seq_measles, I = mh_pred_measles[, "I"], method = "Metropolis-Hastings")
+)
+
+#Create plots
+measles_fit_plot <- create_comparison_plots(measles_data, measles_predictions, "Measles", "measles")
+print(measles_fit_plot)
+measles_diagnostic <- create_diagnostic_plots(measles_bs, measles_mh)
+
+
+#COVID-19 DATA ANALYSIS
+
+#Load and process COVID-19 data
+jhu_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv"
+US_POPULATION <- 331000000
+
+jhu_data <- read_csv(jhu_url, show_col_types = FALSE)
+
+covid_processed <- jhu_data %>%
+  select(-c(UID, iso2, iso3, code3, FIPS, Admin2, Province_State, 
+            Country_Region, Lat, Long_, Combined_Key)) %>%
+  pivot_longer(cols = matches("^\\d+/\\d+/\\d+$"), names_to = "Date", values_to = "Cumulative_Cases") %>%
+  mutate(Date = mdy(Date)) %>%
+  group_by(Date) %>%
+  summarise(Cumulative_Cases = sum(Cumulative_Cases, na.rm = TRUE), .groups = 'drop') %>%
+  arrange(Date) %>%
+  mutate(Daily_New_Cases = Cumulative_Cases - lag(Cumulative_Cases, default = 0)) %>%
+  filter(Daily_New_Cases >= 0, Date >= as.Date("2020-01-22")) %>%
+  mutate(Active_Cases = zoo::rollsum(Daily_New_Cases, k = 14, fill = NA, align = "right")) %>%
+  filter(!is.na(Active_Cases))
+
+covid_data <- covid_processed %>%
+  mutate(
+    Days_Since_Start = as.numeric(Date - min(Date)),
+    Biweek_Group = floor(Days_Since_Start / 14)
+  ) %>%
+  group_by(Biweek_Group) %>%
+  summarise(
+    Start_Date = min(Date),
+    End_Date = max(Date),
+    cases = round(mean(Active_Cases, na.rm = TRUE)/10000),
+    .groups = 'drop'
+  ) %>%
+  filter(Biweek_Group >= 0, cases > 0) %>%
+  mutate(biweek = Biweek_Group + 1) %>%
+  select(biweek, cases, Start_Date, End_Date) %>%
+  arrange(biweek) %>%
+  filter(biweek <= 35)
+
+#Parameters for COVID-19
+N_covid <- 33100
+initial_beta_covid <- 0.2
+initial_gamma_covid <- 0.01
+
+#Fit models
+cat("Running COVID-19 analysis...\n")
+covid_ls <- fit_least_squares(covid_data, N_covid, initial_beta_covid, initial_gamma_covid, "cases")
+covid_bs <- fit_bootstrap(covid_data, N_covid, 500, initial_beta_covid, initial_gamma_covid, "cases")
+covid_mh <- fit_metropolis_hastings(covid_data, N_covid, 10000, 5000, 
+                                    initial_beta_covid, initial_gamma_covid, c(0.01, 0.01), "cases")
+
+#Print results
+cat("COVID-19 Results:\n")
+cat("Least Squares:\n")
+cat(paste("  β =", round(covid_ls$beta, 4), "\n"))
+cat(paste("  γ =", round(covid_ls$gamma, 4), "\n"))
+cat(paste("  R0 =", round(covid_ls$beta/covid_ls$gamma, 2), "\n\n"))
+
+cat("Bootstrap:\n")
+cat(paste("  β =", round(covid_bs$beta_mean, 4), 
+          ", 95% CI: [", round(covid_bs$beta_ci[1], 4), ",", round(covid_bs$beta_ci[2], 4), "]\n"))
+cat(paste("  γ =", round(covid_bs$gamma_mean, 4), 
+          ", 95% CI: [", round(covid_bs$gamma_ci[1], 4), ",", round(covid_bs$gamma_ci[2], 4), "]\n"))
+cat(paste("  R0 =", round(covid_bs$beta_mean/covid_bs$gamma_mean, 2), "\n\n"))
+
+cat("Metropolis-Hastings:\n")
+cat(paste("  β =", round(covid_mh$beta_mean, 4), 
+          ", 95% CI: [", round(covid_mh$beta_ci[1], 4), ",", round(covid_mh$beta_ci[2], 4), "]\n"))
+cat(paste("  γ =", round(covid_mh$gamma_mean, 4), 
+          ", 95% CI: [", round(covid_mh$gamma_ci[1], 4), ",", round(covid_mh$gamma_ci[2], 4), "]\n"))
+cat(paste("  R0 =", round(covid_mh$beta_mean/covid_mh$gamma_mean, 2), "\n"))
+cat(paste("  Acceptance rate:", round(covid_mh$acceptance_rate * 100, 1), "%\n\n"))
+
+#Create predictions for plotting
+time_seq_covid <- seq(min(covid_data$biweek), max(covid_data$biweek), length.out = 100)
+init_covid <- c(S = N_covid - 1, I = 1, R = 0)
+
+ls_pred_covid <- ode(y = init_covid, times = time_seq_covid, func = sir_model,
+                     parms = list(beta = covid_ls$beta, gamma = covid_ls$gamma))
+bs_pred_covid <- ode(y = init_covid, times = time_seq_covid, func = sir_model,
+                     parms = list(beta = covid_bs$beta_mean, gamma = covid_bs$gamma_mean))
+mh_pred_covid <- ode(y = init_covid, times = time_seq_covid, func = sir_model,
+                     parms = list(beta = covid_mh$beta_mean, gamma = covid_mh$gamma_mean))
+
+covid_predictions <- rbind(
+  data.frame(time = time_seq_covid, I = ls_pred_covid[, "I"], method = "Least Squares"),
+  data.frame(time = time_seq_covid, I = bs_pred_covid[, "I"], method = "Bootstrap"),
+  data.frame(time = time_seq_covid, I = mh_pred_covid[, "I"], method = "Metropolis-Hastings")
+)
+
+#Create plots
+covid_fit_plot <- create_comparison_plots(covid_data, covid_predictions, "COVID-19", "cases")
+print(covid_fit_plot)
+covid_diagnostic <- create_diagnostic_plots(covid_bs, covid_mh)
+
+
+#COMPARISON TABLES
+
+
+#Measles comparison table
+measles_comparison <- data.frame(
+  Method = c("Least Squares", "Bootstrap", "Metropolis-Hastings"),
+  Beta_Estimate = c(measles_ls$beta, measles_bs$beta_mean, measles_mh$beta_mean),
+  Beta_Lower = c(NA, measles_bs$beta_ci[1], measles_mh$beta_ci[1]),
+  Beta_Upper = c(NA, measles_bs$beta_ci[2], measles_mh$beta_ci[2]),
+  Gamma_Estimate = c(measles_ls$gamma, measles_bs$gamma_mean, measles_mh$gamma_mean),
+  Gamma_Lower = c(NA, measles_bs$gamma_ci[1], measles_mh$gamma_ci[1]),
+  Gamma_Upper = c(NA, measles_bs$gamma_ci[2], measles_mh$gamma_ci[2]),
+  R0 = c(measles_ls$beta/measles_ls$gamma, measles_bs$beta_mean/measles_bs$gamma_mean, 
+         measles_mh$beta_mean/measles_mh$gamma_mean)
+)
+
+#COVID-19 comparison table
+covid_comparison <- data.frame(
+  Method = c("Least Squares", "Bootstrap", "Metropolis-Hastings"),
+  Beta_Estimate = c(covid_ls$beta, covid_bs$beta_mean, covid_mh$beta_mean),
+  Beta_Lower = c(NA, covid_bs$beta_ci[1], covid_mh$beta_ci[1]),
+  Beta_Upper = c(NA, covid_bs$beta_ci[2], covid_mh$beta_ci[2]),
+  Gamma_Estimate = c(covid_ls$gamma, covid_bs$gamma_mean, covid_mh$gamma_mean),
+  Gamma_Lower = c(NA, covid_bs$gamma_ci[1], covid_mh$gamma_ci[1]),
+  Gamma_Upper = c(NA, covid_bs$gamma_ci[2], covid_mh$gamma_ci[2]),
+  R0 = c(covid_ls$beta/covid_ls$gamma, covid_bs$beta_mean/covid_bs$gamma_mean, 
+         covid_mh$beta_mean/covid_mh$gamma_mean)
+)
+
+print(measles_comparison)
+print(covid_comparison)

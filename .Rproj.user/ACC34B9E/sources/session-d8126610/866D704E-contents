@@ -1,0 +1,947 @@
+# SIR Model Dual-Dataset Comparison Shiny Application
+# Side-by-side Measles vs COVID-19 Analysis
+# Methods: Least Squares + Bootstrap + Metropolis-Hastings with 95% CI
+
+# Load required packages
+library(shiny)
+library(shinydashboard)
+library(DT)
+library(plotly)
+library(deSolve)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(shinyWidgets)
+library(readr)
+library(lubridate)
+library(zoo)
+library(tidyr)
+library(httr)
+
+# Define UI
+ui <- dashboardPage(
+  # Dashboard Header
+  dashboardHeader(
+    title = "Measles vs COVID-19",
+    titleWidth = 400
+  ),
+  
+  # Dashboard Sidebar
+  dashboardSidebar(collapsed = TRUE,
+                   width = 250,
+                   sidebarMenu(
+                     menuItem("Dashboard", tabName = "dashboard", icon = icon("dashboard")),
+                     menuItem("Model Description", tabName = "model_desc", icon = icon("info-circle"))
+                     #menuItem("shinyapps.io", icon = icon("external-link"), href = "https://shinyapps.io")
+                   )
+  ),
+  
+  # Dashboard Body
+  dashboardBody(
+    tags$head(
+      tags$style(HTML("
+        .content-wrapper, .right-side {
+          background-color: #f4f4f4;
+        }
+        .box {
+          border-radius: 8px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .info-icon {
+          color: #3c8dbc;
+          cursor: pointer;
+        }
+        .parameter-input {
+          margin-bottom: 10px;
+        }
+        .method-box {
+          border-left: 4px solid;
+        }
+        .measles-box { border-left-color: #d73027; background-color: #fff5f5; }
+        .covid-box { border-left-color: #4575b4; background-color: #f5f8ff; }
+        .dual-panel { margin-bottom: 15px; }
+      "))
+    ),
+    
+    tabItems(
+      # Dashboard Tab
+      tabItem(tabName = "dashboard",
+              
+              # Data Loading Section
+              fluidRow(
+                box(
+                  title = "Data Loading", status = "primary", solidHeader = TRUE,
+                  width = 12, collapsible = TRUE,
+                  div(style = "text-align: center; padding: 10px;",
+                      actionButton("load_both_data", "Load Both Datasets", 
+                                   class = "btn btn-primary btn-lg")
+                  )
+                )
+              ),
+              
+              # Parameters Section - Side by Side
+              fluidRow(
+                # Measles Parameters (Left)
+                box(
+                  title = "Measles Parameters (Niamey)", status = "danger", solidHeader = TRUE,
+                  width = 6, collapsible = TRUE, class = "measles-box",
+                  
+                  h4("SIR Model Parameters", style = "color: #d73027;"),
+                  div(class = "parameter-input",
+                      strong("Population Size (N):"),
+                      numericInput("measles_N", NULL, value = 3500, min = 100, max = 1000000, step = 100)
+                  ),
+                  div(class = "parameter-input",
+                      strong("Initial Transmission Rate (β₀):"),
+                      numericInput("measles_beta", NULL, value = 0.2, min = 0.001, max = 2, step = 0.01)
+                  ),
+                  div(class = "parameter-input",
+                      strong("Initial Recovery Rate (γ₀):"),
+                      numericInput("measles_gamma", NULL, value = 0.21, min = 0.001, max = 1, step = 0.01)
+                  ),
+                  
+                  h4("Bootstrap Parameters", style = "color: #d73027;"),
+                  div(class = "parameter-input",
+                      strong("Bootstrap Samples:"),
+                      numericInput("measles_n_bootstrap", NULL, value = 100, min = 50, max = 1000, step = 50)
+                  ),
+                  
+                  h4("MCMC Parameters", style = "color: #d73027;"),
+                  div(class = "parameter-input",
+                      strong("MCMC Iterations:"),
+                      numericInput("measles_n_iterations", NULL, value = 10000, min = 5000, max = 20000, step = 500)
+                  ),
+                  div(class = "parameter-input",
+                      strong("Burn-in Period:"),
+                      numericInput("measles_burnin", NULL, value = 2000, min = 1000, max = 5000, step = 100)
+                  ),
+                  div(class = "parameter-input",
+                      strong("Proposal SD for β:"),
+                      numericInput("measles_proposal_sd_beta", NULL, value = 0.014, min = 0.001, max = 0.1, step = 0.001)
+                  ),
+                  div(class = "parameter-input",
+                      strong("Proposal SD for γ:"),
+                      numericInput("measles_proposal_sd_gamma", NULL, value = 0.014, min = 0.001, max = 0.1, step = 0.001)
+                  )
+                ),
+                
+                # COVID Parameters (Right)
+                box(
+                  title = "COVID-19 Parameters (US)", status = "primary", solidHeader = TRUE,
+                  width = 6, collapsible = TRUE, class = "covid-box",
+                  
+                  h4("SIR Model Parameters", style = "color: #4575b4;"),
+                  div(class = "parameter-input",
+                      strong("Population Size (N):"),
+                      numericInput("covid_N", NULL, value = 33100, min = 100, max = 1000000, step = 100)
+                  ),
+                  div(class = "parameter-input",
+                      strong("Initial Transmission Rate (β₀):"),
+                      numericInput("covid_beta", NULL, value = 0.2, min = 0.001, max = 2, step = 0.01)
+                  ),
+                  div(class = "parameter-input",
+                      strong("Initial Recovery Rate (γ₀):"),
+                      numericInput("covid_gamma", NULL, value = 0.01, min = 0.001, max = 1, step = 0.01)
+                  ),
+                  
+                  h4("Bootstrap Parameters", style = "color: #4575b4;"),
+                  div(class = "parameter-input",
+                      strong("Bootstrap Samples:"),
+                      numericInput("covid_n_bootstrap", NULL, value = 100, min = 50, max = 1000, step = 50)
+                  ),
+                  
+                  h4("MCMC Parameters", style = "color: #4575b4;"),
+                  div(class = "parameter-input",
+                      strong("MCMC Iterations:"),
+                      numericInput("covid_n_iterations", NULL, value = 10000, min = 5000, max = 20000, step = 500)
+                  ),
+                  div(class = "parameter-input",
+                      strong("Burn-in Period:"),
+                      numericInput("covid_burnin", NULL, value = 2000, min = 1000, max = 5000, step = 100)
+                  ),
+                  div(class = "parameter-input",
+                      strong("Proposal SD for β:"),
+                      numericInput("covid_proposal_sd_beta", NULL, value = 0.01, min = 0.001, max = 0.1, step = 0.001)
+                  ),
+                  div(class = "parameter-input",
+                      strong("Proposal SD for γ:"),
+                      numericInput("covid_proposal_sd_gamma", NULL, value = 0.01, min = 0.001, max = 0.1, step = 0.001)
+                  )
+                )
+              ),
+              
+              # Action Buttons
+              fluidRow(
+                box(
+                  width = 12, status = "success",
+                  div(style = "text-align: center; padding: 10px;",
+                      actionButton("run_dual_analysis", "Run Dual Analysis", 
+                                   class = "btn btn-success btn-lg", 
+                                   style = "margin-right: 10px;"),
+                      actionButton("add_record", "Add Record", 
+                                   class = "btn btn-info btn-lg", 
+                                   style = "margin-right: 10px;"),
+                      actionButton("remove_record", "Remove Selected Record", 
+                                   class = "btn btn-danger btn-lg")
+                  )
+                )
+              ),
+              
+              # Analysis Records
+              fluidRow(
+                box(
+                  title = "Dual Analysis Records & Results", status = "warning", solidHeader = TRUE,
+                  width = 12, collapsible = TRUE,
+                  fluidRow(
+                    column(10, 
+                           DT::dataTableOutput("dual_records")
+                    ),
+                    column(2,
+                           br(), br(),
+                           downloadButton("download_dual_records", "Download Records", 
+                                          class = "btn btn-info btn-block")
+                    )
+                  )
+                )
+              ),
+              
+              # Visualization Section - Dual Side by Side
+              fluidRow(
+                # Measles Visualizations (Left)
+                box(
+                  title = "Measles Analysis Results", status = "danger", solidHeader = TRUE,
+                  width = 6, collapsible = TRUE, class = "measles-box",
+                  tabsetPanel(
+                    tabPanel("Method Comparison", 
+                             plotlyOutput("measles_comparison", height = "300px")),
+                    tabPanel("Bootstrap & MH Distribution", 
+                             plotlyOutput("measles_param_dist", height = "300px")),
+                    tabPanel("MCMC Trace", 
+                             plotlyOutput("measles_trace", height = "300px")),
+                    tabPanel("MH Posterior", 
+                             plotlyOutput("measles_posterior", height = "300px")),
+                    tabPanel("Parameter Space", 
+                             plotlyOutput("measles_param_space", height = "300px"))
+                  )
+                ),
+                
+                # COVID Visualizations (Right)
+                box(
+                  title = "COVID-19 Analysis Results", status = "primary", solidHeader = TRUE,
+                  width = 6, collapsible = TRUE, class = "covid-box",
+                  tabsetPanel(
+                    tabPanel("Method Comparison", 
+                             plotlyOutput("covid_comparison", height = "300px")),
+                    tabPanel("Bootstrap & MH Distribution", 
+                             plotlyOutput("covid_param_dist", height = "300px")),
+                    tabPanel("MCMC Trace", 
+                             plotlyOutput("covid_trace", height = "300px")),
+                    tabPanel("MH Posterior", 
+                             plotlyOutput("covid_posterior", height = "300px")),
+                    tabPanel("Parameter Space", 
+                             plotlyOutput("covid_param_space", height = "300px"))
+                  )
+                )
+              )
+      ),
+      
+      # Model Description Tab (keeping the existing content)
+      tabItem(tabName = "model_desc",
+              fluidRow(
+                # Deterministic SIR Model Section
+                box(
+                  title = "Deterministic SIR Model", status = "primary", solidHeader = TRUE,
+                  width = 12,
+                  h3("Susceptible-Infected-Recovered (SIR) Model"),
+                  p("The SIR model is a compartmental epidemiological model that describes the dynamics of infectious disease transmission in a population using differential equations."),
+                  h4("Model Equations:"),
+                  withMathJax(),
+                  p("$$\\frac{dS}{dt} = -\\beta \\frac{SI}{N}$$"),
+                  p("$$\\frac{dI}{dt} = \\beta \\frac{SI}{N} - \\gamma I$$"),
+                  p("$$\\frac{dR}{dt} = \\gamma I$$"),
+                  h4("Parameters:"),
+                  tags$ul(
+                    tags$li(strong("S(t):"), " Number of susceptible individuals at time t"),
+                    tags$li(strong("I(t):"), " Number of infected individuals at time t"),
+                    tags$li(strong("R(t):"), " Number of recovered individuals at time t"),
+                    tags$li(strong("N:"), " Total population size (S + I + R = N)"),
+                    tags$li(strong("β:"), " Transmission rate (contact rate × probability of transmission)"),
+                    tags$li(strong("γ:"), " Recovery rate (1/infectious period)"),
+                    tags$li(strong("R₀ = β/γ:"), " Basic reproduction number")
+                  )
+                )
+              ),
+              
+              fluidRow(
+                # Stochastic SIR Model Section
+                box(
+                  title = "Stochastic SIR Model", status = "info", solidHeader = TRUE,
+                  width = 12,
+                  h3("Stochastic Susceptible-Infected-Recovered (SIR) Model"),
+                  p("The stochastic SIR model extends the deterministic version by incorporating random fluctuations and uncertainty in disease transmission. Unlike the deterministic model which produces smooth curves, the stochastic model accounts for the inherent randomness in individual contacts and disease progression."),
+                  
+                  h4("Key Features of Stochastic SIR Models:"),
+                  tags$ul(
+                    tags$li(strong("Random Events:"), " Each infection and recovery event occurs randomly with specified probabilities"),
+                    tags$li(strong("Discrete Population:"), " Tracks integer numbers of individuals rather than continuous values"),
+                    tags$li(strong("Event-Driven Simulation:"), " Uses exponential waiting times between events"),
+                    tags$li(strong("Variability:"), " Multiple simulations produce different epidemic curves, capturing uncertainty")
+                  ),
+                  
+                  h4("Event Rates:"),
+                  withMathJax(),
+                  tags$ul(
+                    tags$li("Infection rate: ", "$$\\lambda_{infection} = \\frac{\\beta SI}{N}$$"),
+                    tags$li("Recovery rate: ", "$$\\lambda_{recovery} = \\gamma I$$")
+                  ),
+                  
+                  h4("Parameter Estimation Methods:"),
+                  tags$ul(
+                    tags$li(strong("Least Squares:"), " Minimizes the sum of squared residuals between observed and predicted values"),
+                    tags$li(strong("Bootstrap Method:"), " Provides confidence intervals by resampling the original data multiple times")
+                  ),
+                  
+                  p(strong("Advantages:"), " Stochastic models better capture the uncertainty and variability observed in real epidemics, especially for small populations or early stages of outbreaks.")
+                )
+              ),
+              
+              fluidRow(
+                # Real-World Examples Section
+                box(
+                  title = "Real-World Applications", status = "success", solidHeader = TRUE,
+                  width = 12,
+                  h3("Stochastic SIR Model Examples"),
+                  p("Below are two comprehensive examples demonstrating the application of stochastic SIR models to real epidemiological data:"),
+                  
+                  br(),
+                  
+                  # COVID-19 Example
+                  div(
+                    style = "border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; background-color: #f8f9fa;",
+                    h4(icon("virus"), " COVID-19 Pandemic Analysis", style = "color: #d32f2f;"),
+                    p("This analysis applies stochastic SIR modeling to COVID-19 data from the Johns Hopkins University database, covering the US pandemic progression from January 2020 to early 2021."),
+                    tags$ul(
+                      tags$li(strong("Data Source:"), " Johns Hopkins CSSE COVID-19 Time Series"),
+                      tags$li(strong("Population:"), " US population (~331 million)"),
+                      tags$li(strong("Methods:"), " Least squares and bootstrap parameter estimation"),
+                      tags$li(strong("Key Results:"), " R₀ estimates and transmission dynamics analysis")
+                    ),
+                    br(),
+                    div(
+                      style = "text-align: center;",
+                      tags$a(
+                        href = "covid_stochastic.html",
+                        target = "_blank",
+                        class = "btn btn-primary btn-lg",
+                        style = "text-decoration: none; color: white; display: inline-block; padding: 10px 20px;",
+                        HTML("<i class='fa fa-external-link-alt'></i> View COVID-19 Analysis")
+                      )
+                    )
+                  ),
+                  
+                  br(),
+                  
+                  # Measles Example
+                  div(
+                    style = "border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; background-color: #f0f8f0;",
+                    h4(icon("hospital-o"), " Measles Outbreak Analysis", style = "color: #388e3c;"),
+                    p("This study examines measles transmission dynamics in Niamey, Niger, using stochastic SIR modeling to understand epidemic patterns in a smaller, well-defined population."),
+                    tags$ul(
+                      tags$li(strong("Data Source:"), " Niamey measles outbreak data (Community A)"),
+                      tags$li(strong("Population:"), " ~3,500 individuals"),
+                      tags$li(strong("Methods:"), " Stochastic simulation with bootstrap confidence intervals"),
+                      tags$li(strong("Key Results:"), " Higher R₀ values typical of measles, seasonal patterns")
+                    ),
+                    br(),
+                    div(
+                      style = "text-align: center;",
+                      tags$a(
+                        href = "measles_stochastic.html",
+                        target = "_blank",
+                        class = "btn btn-success btn-lg",
+                        style = "text-decoration: none; color: white; display: inline-block; padding: 10px 20px;",
+                        HTML("<i class='fa fa-external-link-alt'></i> View Measles Analysis")
+                      )
+                    )
+                  ),
+                  
+                  br(),
+                  
+                  div(
+                    style = "background-color: #e3f2fd; padding: 10px; border-radius: 5px; border-left: 4px solid #1976d2;",
+                    p(strong("Note:"), " These examples demonstrate the practical implementation of stochastic SIR models for parameter estimation and uncertainty quantification in real epidemiological scenarios. The analyses include detailed visualizations, parameter comparisons, and bootstrap confidence intervals.")
+                  )
+                )
+              )
+              
+      )
+    )
+  )
+)
+
+# Define Server Logic
+server <- function(input, output, session) {
+  
+  # Reactive values for storing data and results
+  values <- reactiveValues(
+    measles_data = NULL,
+    covid_data = NULL,
+    measles_results = list(ls = NULL, bs = NULL, mh = NULL),
+    covid_results = list(ls = NULL, bs = NULL, mh = NULL),
+    records = data.frame(),
+    analysis_complete = FALSE
+  )
+  
+  # Load Both Datasets Function
+  observeEvent(input$load_both_data, {
+    withProgress(message = 'Loading both datasets...', value = 0, {
+      
+      # Load Measles Data
+      incProgress(0.2, detail = "Loading measles data...")
+      tryCatch({
+        niamey <- read_csv("http://kingaa.github.io/clim-dis/parest/niamey.csv", show_col_types = FALSE)
+        
+        values$measles_data <- niamey %>% 
+          filter(community == "A") %>%
+          select(biweek, measles) %>%
+          arrange(biweek) %>%
+          rename(time = biweek, cases = measles)
+        
+        incProgress(0.5, detail = "Measles data loaded successfully!")
+        
+      }, error = function(e) {
+        showNotification(paste("Error loading measles data:", e$message), type = "error")
+      })
+      
+      # Load COVID-19 Data
+      incProgress(0.6, detail = "Loading COVID-19 data...")
+      tryCatch({
+        jhu_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv"
+        US_POPULATION <- 331000000
+        
+        jhu_data <- read_csv(jhu_url, show_col_types = FALSE)
+        
+        # Process COVID data
+        covid_processed <- jhu_data %>%
+          select(-c(UID, iso2, iso3, code3, FIPS, Admin2, Province_State, 
+                    Country_Region, Lat, Long_, Combined_Key)) %>%
+          pivot_longer(cols = matches("^\\d+/\\d+/\\d+$"), names_to = "Date", values_to = "Cumulative_Cases") %>%
+          mutate(Date = mdy(Date)) %>%
+          group_by(Date) %>%
+          summarise(Cumulative_Cases = sum(Cumulative_Cases, na.rm = TRUE), .groups = 'drop') %>%
+          arrange(Date) %>%
+          mutate(Daily_New_Cases = Cumulative_Cases - lag(Cumulative_Cases, default = 0)) %>%
+          filter(Daily_New_Cases >= 0, Date >= as.Date("2020-01-22")) %>%
+          mutate(
+            Active_Cases = zoo::rollsum(Daily_New_Cases, k = 14, fill = NA, align = "right")
+          ) %>%
+          filter(!is.na(Active_Cases))
+        
+        # Aggregate by biweek
+        values$covid_data <- covid_processed %>%
+          mutate(
+            Days_Since_Start = as.numeric(Date - min(Date)),
+            Biweek_Group = floor(Days_Since_Start / 14)
+          ) %>%
+          group_by(Biweek_Group) %>%
+          summarise(
+            Start_Date = min(Date),
+            End_Date = max(Date),
+            cases = round(mean(Active_Cases, na.rm = TRUE)/10000),
+            .groups = 'drop'
+          ) %>%
+          filter(Biweek_Group >= 0, cases > 0) %>%
+          mutate(time = Biweek_Group + 1) %>%
+          select(time, cases, Start_Date, End_Date) %>%
+          arrange(time) %>%
+          filter(time <= 35)
+        
+        incProgress(1, detail = "Both datasets loaded successfully!")
+        showNotification("Both datasets loaded successfully!", type = "message")
+        
+      }, error = function(e) {
+        showNotification(paste("Error loading COVID-19 data:", e$message), type = "error")
+      })
+    })
+  })
+  
+  # SIR model function
+  sir_model <- function(time, state, parameters) {
+    with(as.list(c(state, parameters)), {
+      N_total <- S + I + R
+      dS <- -beta * S * I / N_total
+      dI <- beta * S * I / N_total - gamma * I
+      dR <- gamma * I
+      list(c(dS, dI, dR))
+    })
+  }
+  
+  # Function to run analysis for a single dataset
+  run_single_analysis <- function(dataset, N, initial_beta, initial_gamma, 
+                                  n_bootstrap, seed_bootstrap, n_iterations, 
+                                  burnin, proposal_sd_beta, proposal_sd_gamma, seed_mh) {
+    
+    # Method 1: Least Squares
+    ls_objective <- function(params) {
+      if(any(params <= 0)) return(1e10)
+      
+      init <- c(S = N - 1, I = 1, R = 0)
+      
+      tryCatch({
+        sol <- ode(y = init, times = dataset$time, func = sir_model, 
+                   parms = list(beta = params[1], gamma = params[2]))
+        predicted_I <- sol[, "I"]
+        residuals <- (dataset$cases - predicted_I)^2
+        return(sum(residuals, na.rm = TRUE))
+      }, error = function(e) return(1e10))
+    }
+    
+    ls_result <- optim(par = c(initial_beta, initial_gamma), 
+                       fn = ls_objective, 
+                       method = "L-BFGS-B",
+                       lower = c(0.001, 0.001))
+    
+    ls_results <- list(
+      beta = ls_result$par[1],
+      gamma = ls_result$par[2],
+      R0 = ls_result$par[1] / ls_result$par[2],
+      convergence = ls_result$convergence
+    )
+    
+    # Method 2: Bootstrap
+    #set.seed(seed_bootstrap)
+    bootstrap_results <- matrix(NA, nrow = n_bootstrap, ncol = 2)
+    
+    for(i in 1:n_bootstrap) {
+      sample_indices <- sample(1:nrow(dataset), replace = TRUE)
+      bootstrap_data <- dataset[sample_indices, ]
+      bootstrap_data <- bootstrap_data[order(bootstrap_data$time), ]
+      
+      bootstrap_objective <- function(params) {
+        if(any(params <= 0)) return(1e10)
+        init <- c(S = N - 1, I = 1, R = 0)
+        tryCatch({
+          sol <- ode(y = init, times = bootstrap_data$time, func = sir_model, 
+                     parms = list(beta = params[1], gamma = params[2]))
+          predicted_I <- sol[, "I"]
+          residuals <- (bootstrap_data$cases - predicted_I)^2
+          return(sum(residuals, na.rm = TRUE))
+        }, error = function(e) return(1e10))
+      }
+      
+      tryCatch({
+        bs_fit <- optim(par = c(initial_beta, initial_gamma), 
+                        fn = bootstrap_objective, 
+                        method = "L-BFGS-B", 
+                        lower = c(0.001, 0.001))
+        if(!any(bs_fit$par > 10)) {
+          bootstrap_results[i, ] <- bs_fit$par
+        }
+      }, error = function(e) {})
+    }
+    
+    valid_bs <- complete.cases(bootstrap_results)
+    bs_results <- NULL
+    if(sum(valid_bs) > 0) {
+      valid_bootstrap <- bootstrap_results[valid_bs, ]
+      
+      bs_results <- list(
+        beta_mean = mean(valid_bootstrap[, 1]),
+        gamma_mean = mean(valid_bootstrap[, 2]),
+        beta_ci = quantile(valid_bootstrap[, 1], c(0.025, 0.975)),
+        gamma_ci = quantile(valid_bootstrap[, 2], c(0.025, 0.975)),
+        bootstrap_data = valid_bootstrap,
+        n_valid = sum(valid_bs)
+      )
+      bs_results$R0 <- bs_results$beta_mean / bs_results$gamma_mean
+    }
+    
+    # Method 3: Metropolis-Hastings
+    mh_log_likelihood <- function(params) {
+      if(any(params <= 0)) return(-Inf)
+      init <- c(S = N - 1, I = 1, R = 0)
+      tryCatch({
+        sol <- ode(y = init, times = dataset$time, func = sir_model, 
+                   parms = list(beta = params[1], gamma = params[2]))
+        predicted_I <- sol[, "I"]
+        if(any(predicted_I <= 0)) return(-Inf)
+        
+        log_lik <- sum(dpois(dataset$cases, lambda = predicted_I, log = TRUE), na.rm = TRUE)
+        return(log_lik)
+      }, error = function(e) return(-Inf))
+    }
+    
+    #set.seed(seed_mh)
+    mh_chain <- matrix(NA, nrow = n_iterations, ncol = 3)
+    colnames(mh_chain) <- c("beta", "gamma", "log_posterior")
+    
+    current_params <- c(initial_beta, initial_gamma)
+    current_posterior <- mh_log_likelihood(current_params)
+    mh_chain[1, ] <- c(current_params, current_posterior)
+    
+    accepted <- 0
+    
+    for(i in 2:n_iterations) {
+      proposed_params <- current_params + rnorm(2, 0, c(proposal_sd_beta, proposal_sd_gamma))
+      proposed_params <- pmax(proposed_params, 0.001)
+      proposed_posterior <- mh_log_likelihood(proposed_params)
+      
+      if(is.finite(proposed_posterior) && is.finite(current_posterior)) {
+        accept_prob <- exp(proposed_posterior - current_posterior)
+        if(runif(1) < accept_prob) {
+          current_params <- proposed_params
+          current_posterior <- proposed_posterior
+          accepted <- accepted + 1
+        }
+      }
+      
+      mh_chain[i, ] <- c(current_params, current_posterior)
+    }
+    
+    burnin_end <- burnin
+    mh_final <- mh_chain[(burnin_end + 1):n_iterations, ]
+    
+    mh_results <- list(
+      beta_mean = mean(mh_final[, "beta"]),
+      gamma_mean = mean(mh_final[, "gamma"]),
+      beta_ci = quantile(mh_final[, "beta"], c(0.025, 0.975)),
+      gamma_ci = quantile(mh_final[, "gamma"], c(0.025, 0.975)),
+      chain_data = mh_final,
+      full_chain = mh_chain,
+      acceptance_rate = accepted / n_iterations
+    )
+    mh_results$R0 <- mh_results$beta_mean / mh_results$gamma_mean
+    
+    return(list(ls = ls_results, bs = bs_results, mh = mh_results))
+  }
+  
+  # Main Dual Analysis Function
+  observeEvent(input$run_dual_analysis, {
+    
+    if(is.null(values$measles_data) || is.null(values$covid_data)) {
+      showNotification("Please load both datasets first!", type = "error")
+      return()
+    }
+    
+    withProgress(message = 'Running dual analysis...', value = 0, {
+      
+      # Run Measles Analysis
+      incProgress(0.1, detail = "Running measles analysis...")
+      values$measles_results <- run_single_analysis(
+        values$measles_data, input$measles_N, input$measles_beta, input$measles_gamma,
+        input$measles_n_bootstrap, input$measles_seed_bootstrap, input$measles_n_iterations,
+        input$measles_burnin, input$measles_proposal_sd_beta, input$measles_proposal_sd_gamma, 
+        input$measles_seed_mh
+      )
+      
+      incProgress(0.5, detail = "Running COVID-19 analysis...")
+      # Run COVID Analysis
+      values$covid_results <- run_single_analysis(
+        values$covid_data, input$covid_N, input$covid_beta, input$covid_gamma,
+        input$covid_n_bootstrap, input$covid_seed_bootstrap, input$covid_n_iterations,
+        input$covid_burnin, input$covid_proposal_sd_beta, input$covid_proposal_sd_gamma, 
+        input$covid_seed_mh
+      )
+      
+      values$analysis_complete <- TRUE
+      incProgress(1, detail = "Dual analysis complete!")
+    })
+    
+    showNotification("Dual analysis completed successfully!", type = "message")
+  })
+  
+  # Function to create comparison plot with confidence intervals
+  create_comparison_plot <- function(data_set, results, N, dataset_name, color_scheme) {
+    if(is.null(results$ls) || is.null(results$bs) || is.null(results$mh)) {
+      return(plot_ly() %>% add_text(x = 0.5, y = 0.5, text = "Run analysis first"))
+    }
+    
+    time_seq <- seq(min(data_set$time), max(data_set$time), length.out = 100)
+    init <- c(S = N - 1, I = 1, R = 0)
+    
+    tryCatch({
+      # LS prediction
+      sol_ls <- ode(y = init, times = time_seq, func = sir_model, 
+                    parms = list(beta = results$ls$beta, gamma = results$ls$gamma))
+      
+      # Bootstrap prediction with CI
+      sol_bs <- ode(y = init, times = time_seq, func = sir_model, 
+                    parms = list(beta = results$bs$beta_mean, gamma = results$bs$gamma_mean))
+      
+      # Bootstrap CI calculations
+      bs_samples <- results$bs$bootstrap_data
+      bs_predictions <- array(NA, dim = c(length(time_seq), nrow(bs_samples)))
+      
+      for(i in 1:nrow(bs_samples)) {
+        sol_temp <- ode(y = init, times = time_seq, func = sir_model, 
+                        parms = list(beta = bs_samples[i,1], gamma = bs_samples[i,2]))
+        bs_predictions[,i] <- sol_temp[,"I"]
+      }
+      
+      bs_ci_lower <- apply(bs_predictions, 1, quantile, 0.025, na.rm = TRUE)
+      bs_ci_upper <- apply(bs_predictions, 1, quantile, 0.975, na.rm = TRUE)
+      
+      # MH prediction with CI
+      sol_mh <- ode(y = init, times = time_seq, func = sir_model, 
+                    parms = list(beta = results$mh$beta_mean, gamma = results$mh$gamma_mean))
+      
+      # MH CI calculations
+      mh_samples <- results$mh$chain_data[,1:2]
+      mh_predictions <- array(NA, dim = c(length(time_seq), nrow(mh_samples)))
+      
+      sample_indices <- sample(1:nrow(mh_samples), min(500, nrow(mh_samples))) # Sample for efficiency
+      for(i in sample_indices) {
+        sol_temp <- ode(y = init, times = time_seq, func = sir_model, 
+                        parms = list(beta = mh_samples[i,1], gamma = mh_samples[i,2]))
+        mh_predictions[,match(i, sample_indices)] <- sol_temp[,"I"]
+      }
+      
+      mh_ci_lower <- apply(mh_predictions[,1:length(sample_indices)], 1, quantile, 0.025, na.rm = TRUE)
+      mh_ci_upper <- apply(mh_predictions[,1:length(sample_indices)], 1, quantile, 0.975, na.rm = TRUE)
+      
+      # Create plot with confidence intervals
+      p <- plot_ly() %>%
+        # Observed data
+        add_markers(data = data_set, x = ~time, y = ~cases, name = "Observed Data",
+                    marker = list(color = "black", size = 8)) %>%
+        
+        # Bootstrap CI
+        add_ribbons(x = time_seq, ymin = bs_ci_lower, ymax = bs_ci_upper,
+                    name = "Bootstrap 95% CI", fillcolor = "rgba(70, 130, 180, 0.2)",
+                    line = list(color = "transparent")) %>%
+        
+        # MH CI
+        add_ribbons(x = time_seq, ymin = mh_ci_lower, ymax = mh_ci_upper,
+                    name = "MH 95% CI", fillcolor = "rgba(50, 205, 50, 0.2)",
+                    line = list(color = "transparent")) %>%
+        
+        # Method predictions
+        add_lines(x = time_seq, y = sol_ls[,"I"], name = "Least Squares", 
+                  line = list(color = color_scheme[1], width = 3)) %>%
+        add_lines(x = time_seq, y = sol_bs[,"I"], name = "Bootstrap", 
+                  line = list(color = color_scheme[2], width = 3, dash = "dash")) %>%
+        add_lines(x = time_seq, y = sol_mh[,"I"], name = "Metropolis-Hastings", 
+                  line = list(color = color_scheme[3], width = 3, dash = "dot")) %>%
+        
+        layout(title = list(text = paste(dataset_name, "Model Comparison"), font = list(size = 14)),
+               xaxis = list(title = "Time Period"),
+               yaxis = list(title = "Cases"),
+               legend = list(x = 0.02, y = 0.98))
+      p
+    }, error = function(e) {
+      plot_ly() %>% add_text(x = 0.5, y = 0.5, text = "Error creating plot")
+    })
+  }
+  
+  # Measles Comparison Plot
+  output$measles_comparison <- renderPlotly({
+    create_comparison_plot(values$measles_data, values$measles_results, 
+                           input$measles_N, "Measles", c("red", "blue", "green"))
+  })
+  
+  # COVID Comparison Plot
+  output$covid_comparison <- renderPlotly({
+    create_comparison_plot(values$covid_data, values$covid_results, 
+                           input$covid_N, "COVID-19", c("darkred", "darkblue", "darkgreen"))
+  })
+  
+  # Function to create parameter distribution plots
+  create_param_dist_plot <- function(results, title_prefix) {
+    if(is.null(results$bs) || is.null(results$mh)) return(plot_ly())
+    
+    bs_data <- results$bs$bootstrap_data
+    mh_data <- results$mh$chain_data
+    
+    p1 <- plot_ly() %>%
+      add_histogram(x = ~bs_data[,1], name = "Bootstrap β", alpha = 0.6,
+                    marker = list(color = "lightblue")) %>%
+      add_histogram(x = ~mh_data[,1], name = "MH β", alpha = 0.6,
+                    marker = list(color = "pink")) %>%
+      layout(xaxis = list(title = "β"), yaxis = list(title = "Frequency"),
+             barmode = "overlay")
+    
+    p2 <- plot_ly() %>%
+      add_histogram(x = ~bs_data[,2], name = "Bootstrap γ", alpha = 0.6,
+                    marker = list(color = "lightgreen")) %>%
+      add_histogram(x = ~mh_data[,2], name = "MH γ", alpha = 0.6,
+                    marker = list(color = "lightcoral")) %>%
+      layout(xaxis = list(title = "γ"), yaxis = list(title = "Frequency"),
+             barmode = "overlay")
+    
+    subplot(p1, p2, nrows = 2, shareY = FALSE) %>% 
+      layout(title = list(text = paste(title_prefix, "Parameter Distributions"), font = list(size = 14)))
+  }
+  
+  # Measles Parameter Distribution
+  output$measles_param_dist <- renderPlotly({
+    create_param_dist_plot(values$measles_results, "Measles")
+  })
+  
+  # COVID Parameter Distribution
+  output$covid_param_dist <- renderPlotly({
+    create_param_dist_plot(values$covid_results, "COVID-19")
+  })
+  
+  # Function to create trace plots
+  create_trace_plot <- function(results, title_prefix) {
+    if(is.null(results$mh)) return(plot_ly())
+    
+    chain_data <- results$mh$chain_data
+    
+    p1 <- plot_ly(y = ~chain_data[,1], type = "scatter", mode = "lines", 
+                  name = "β", line = list(color = "darkred")) %>%
+      layout(yaxis = list(title = "β"))
+    
+    p2 <- plot_ly(y = ~chain_data[,2], type = "scatter", mode = "lines",
+                  name = "γ", line = list(color = "darkgreen")) %>%
+      layout(yaxis = list(title = "γ"))
+    
+    subplot(p1, p2, nrows = 2, shareX = TRUE) %>% 
+      layout(title = list(text = paste(title_prefix, "MCMC Trace"), font = list(size = 14)), 
+             xaxis = list(title = "Iteration"), showlegend = FALSE)
+  }
+  
+  # Measles Trace Plot
+  output$measles_trace <- renderPlotly({
+    create_trace_plot(values$measles_results, "Measles")
+  })
+  
+  # COVID Trace Plot
+  output$covid_trace <- renderPlotly({
+    create_trace_plot(values$covid_results, "COVID-19")
+  })
+  
+  # Function to create posterior plots
+  create_posterior_plot <- function(results, title_prefix) {
+    if(is.null(results$mh)) return(plot_ly())
+    
+    chain_data <- results$mh$chain_data
+    
+    p1 <- plot_ly(x = ~chain_data[,1], type = "histogram", name = "β",
+                  marker = list(color = "pink", opacity = 0.7)) %>%
+      add_segments(x = results$mh$beta_mean, xend = results$mh$beta_mean,
+                   y = 0, yend = max(hist(chain_data[,1], plot = FALSE)$counts) * 0.8,
+                   line = list(color = "red", dash = "dash", width = 3)) %>%
+      layout(xaxis = list(title = "β"), yaxis = list(title = "Density"))
+    
+    p2 <- plot_ly(x = ~chain_data[,2], type = "histogram", name = "γ",
+                  marker = list(color = "lightcoral", opacity = 0.7)) %>%
+      add_segments(x = results$mh$gamma_mean, xend = results$mh$gamma_mean,
+                   y = 0, yend = max(hist(chain_data[,2], plot = FALSE)$counts) * 0.8,
+                   line = list(color = "red", dash = "dash", width = 3)) %>%
+      layout(xaxis = list(title = "γ"), yaxis = list(title = "Density"))
+    
+    subplot(p1, p2, nrows = 2, shareY = FALSE) %>% 
+      layout(title = list(text = paste(title_prefix, "Posterior"), font = list(size = 14)), 
+             showlegend = FALSE)
+  }
+  
+  # Measles Posterior Plot
+  output$measles_posterior <- renderPlotly({
+    create_posterior_plot(values$measles_results, "Measles")
+  })
+  
+  # COVID Posterior Plot
+  output$covid_posterior <- renderPlotly({
+    create_posterior_plot(values$covid_results, "COVID-19")
+  })
+  
+  # Function to create parameter space plots
+  create_param_space_plot <- function(results, title_prefix) {
+    if(is.null(results$mh)) return(plot_ly())
+    
+    chain_data <- results$mh$chain_data
+    
+    plot_ly(x = ~chain_data[,1], y = ~chain_data[,2], type = "scatter", mode = "markers",
+            marker = list(color = "blue", size = 3, opacity = 0.6),
+            name = "MCMC Samples") %>%
+      add_markers(x = results$mh$beta_mean, y = results$mh$gamma_mean,
+                  marker = list(color = "red", size = 10, symbol = "star"),
+                  name = "Posterior Mean") %>%
+      layout(title = list(text = paste(title_prefix, "Parameter Space"), font = list(size = 14)),
+             xaxis = list(title = "β (Transmission Rate)"),
+             yaxis = list(title = "γ (Recovery Rate)"))
+  }
+  
+  # Measles Parameter Space
+  output$measles_param_space <- renderPlotly({
+    create_param_space_plot(values$measles_results, "Measles")
+  })
+  
+  # COVID Parameter Space
+  output$covid_param_space <- renderPlotly({
+    create_param_space_plot(values$covid_results, "COVID-19")
+  })
+  
+  # Add record functionality
+  observeEvent(input$add_record, {
+    if(!values$analysis_complete || is.null(values$measles_results$ls) || is.null(values$covid_results$ls)) {
+      showNotification("Please run dual analysis first!", type = "error")
+      return()
+    }
+    
+    new_record <- data.frame(
+      Timestamp = Sys.time(),
+      Dataset = "Dual (Measles + COVID)",
+      
+      # Measles Results
+      Measles_LS_Beta = round(values$measles_results$ls$beta, 4),
+      Measles_LS_Gamma = round(values$measles_results$ls$gamma, 4),
+      Measles_LS_R0 = round(values$measles_results$ls$R0, 2),
+      Measles_BS_Beta = round(values$measles_results$bs$beta_mean, 4),
+      Measles_BS_Gamma = round(values$measles_results$bs$gamma_mean, 4),
+      Measles_BS_R0 = round(values$measles_results$bs$R0, 2),
+      Measles_MH_Beta = round(values$measles_results$mh$beta_mean, 4),
+      Measles_MH_Gamma = round(values$measles_results$mh$gamma_mean, 4),
+      Measles_MH_R0 = round(values$measles_results$mh$R0, 2),
+      
+      # COVID Results
+      COVID_LS_Beta = round(values$covid_results$ls$beta, 4),
+      COVID_LS_Gamma = round(values$covid_results$ls$gamma, 4),
+      COVID_LS_R0 = round(values$covid_results$ls$R0, 2),
+      COVID_BS_Beta = round(values$covid_results$bs$beta_mean, 4),
+      COVID_BS_Gamma = round(values$covid_results$bs$gamma_mean, 4),
+      COVID_BS_R0 = round(values$covid_results$bs$R0, 2),
+      COVID_MH_Beta = round(values$covid_results$mh$beta_mean, 4),
+      COVID_MH_Gamma = round(values$covid_results$mh$gamma_mean, 4),
+      COVID_MH_R0 = round(values$covid_results$mh$R0, 2),
+      
+      stringsAsFactors = FALSE
+    )
+    
+    values$records <- rbind(values$records, new_record)
+    showNotification("Dual analysis record added successfully!", type = "message")
+  })
+  
+  # Remove selected record
+  observeEvent(input$remove_record, {
+    selected_rows <- input$dual_records_rows_selected
+    if(!is.null(selected_rows) && length(selected_rows) > 0) {
+      values$records <- values$records[-selected_rows, ]
+      showNotification("Selected record(s) removed!", type = "warning")
+    } else {
+      showNotification("Please select a record to remove.", type = "error")
+    }
+  })
+  
+  # Download handler for records
+  output$download_dual_records <- downloadHandler(
+    filename = function() {
+      paste("Dual_SIR_Analysis_Records_", Sys.Date(), ".csv", sep = "")
+    },
+    content = function(file) {
+      write.csv(values$records, file, row.names = FALSE)
+    }
+  )
+  
+  # Render dual records table
+  output$dual_records <- DT::renderDataTable({
+    DT::datatable(values$records, 
+                  selection = "multiple",
+                  options = list(scrollX = TRUE, pageLength = 5))
+  })
+}
+
+# Run the application
+shinyApp(ui = ui, server = server)
+
