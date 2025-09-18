@@ -28,22 +28,29 @@ param_input_factory <- function(inputId, label_symbol, tooltip_text, value, min,
 }
 ui <- dashboardPage(
   dashboardHeader(title = "SIR Model Estimation", titleWidth = 250),
-  dashboardSidebar(width = 250, sidebarMenu(menuItem("Dashboard", tabName = "dashboard", icon = icon("dashboard")), menuItem("Model Description", tabName = "model_desc", icon = icon("info-circle")))),
-  dashboardBody(
-    tags$head(tags$style(HTML("
+  dashboardSidebar(
+    width = 250,
+    sidebarMenu(id = "tabs",
+                tags$li(class = "header", "SIR MODEL ANALYSIS"),
+                menuItem("Dashboard", tabName = "dashboard", icon = icon("dashboard")),
+                menuItem("Model Description", tabName = "model_desc", icon = icon("book-open")),
+                menuItem("GitHub Repo", icon = icon("github"), href = "https://github.com/peiyuliu-biostats/sir-estimation-comparison"),
+                menuItem("Author", tabName = "author", icon = icon("user-circle"))
+    )
+  ),
+   dashboardBody(
+     tags$head(tags$style(HTML("
+       
       .skin-blue .main-header .navbar,
       .skin-blue .main-header .logo {
         background-color: #6c757d !important;
       }
       .box.box-solid.box-warning { border-color: #f0ad4e; }
       .box.box-solid.box-warning > .box-header { background: #f0ad4e; color: #ffffff; }
-      
       .box.box-solid.box-primary { border-color: #6f42c1; }
       .box.box-solid.box-primary > .box-header { background: #6f42c1; color: #ffffff; }
-
       .box.box-primary:not(.box-solid) > .box-header { background-color: #f2e8f9; }
       .box.box-warning:not(.box-solid) > .box-header { background-color: #fce5d4; }
-      
       .center-btn-wrapper { text-align: center; padding-top: 15px; padding-bottom: 15px; }
       #add_record {
         color: #fff;
@@ -51,11 +58,33 @@ ui <- dashboardPage(
         border-color: #6f42c1;
       }
       .plot-title { text-align: left; font-size: 12px; }
-      .loading-message { 
-        text-align: center; 
-        color: #6c757d; 
-        font-weight: bold; 
-        margin: 20px; 
+      .loading-message {
+        text-align: center;
+        color: #6c757d;
+        font-weight: bold;
+        margin: 20px;
+      }
+
+      /* New styles for the sidebar (added) */
+      .skin-blue .main-sidebar {
+        background-color: #ffffff !important;
+      }
+      .skin-blue .sidebar-menu > li > a {
+        color: #333333 !important;
+      }
+      .skin-blue .sidebar-menu > li.header {
+         color: #6f42c1 !important;
+         background: #ffffff !important;
+         font-weight: bold;
+      }
+      .skin-blue .sidebar-menu > li.active > a {
+        background: #f2e8f9 !important;
+        border-left-color: #6f42c1 !important;
+        color: #333333 !important;
+      }
+      .skin-blue .sidebar-menu > li:hover > a {
+        background: #f2e8f9 !important;
+        color: #333333 !important;
       }
     "))),
     tabItems(
@@ -164,6 +193,25 @@ ui <- dashboardPage(
                   tags$ul(
                     tags$li(strong("Deterministic Model:"), "It's computationally fast and provides a good overview of the epidemic's average trend. It is well-suited for large populations where random fluctuations are minimal. The variety of fitting methods available (LS, Bootstrap, MCMC) allows for a deep analysis of parameter uncertainty."),
                     tags$li(strong("Stochastic Model:"), "It provides a more realistic simulation of disease spread by modeling individual chance events. This is particularly important for smaller populations or when studying the probability of epidemic fade-out. However, it is computationally intensive, as it requires averaging many simulations for a stable prediction, making methods like MCMC impractical.")
+                  )
+                )
+              )
+      ),
+      
+      tabItem(tabName = "author",
+              fluidRow(
+                box(
+                  title = "About The Author",
+                  solidHeader = TRUE,
+                  status = "primary",
+                  width = 12,
+                  h3("Author Information"),
+                  p("This application for SIR model estimation and comparison was developed by:"),
+                  tags$ul(
+                    tags$li(HTML("<b>Author:</b> Peiyu Liu")),
+                    tags$li(HTML("<b>Affiliation:</b> Department of Biostatistics, University of Florida")),
+                    tags$li(HTML("<b>Contact:</b> <a href='mailto:pyliu0620@outlook.com'>pyliu0620@outlook.com</a>")),
+                    tags$li(HTML("<b>GitHub:</b> <a href='https://github.com/peiyuliu-biostats' target='_blank'>https://github.com/peiyuliu-biostats</a>"))
                   )
                 )
               )

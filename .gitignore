@@ -1,11 +1,11 @@
 # History files
 .Rhistory
 .Rapp.history
-
+.Rproj.user/
 .RData
 
 .Ruserdata
 
 .rstudio-prefs
 
-rsconnect/
+rsconnect/.Rproj.user/
