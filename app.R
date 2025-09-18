@@ -34,7 +34,8 @@ ui <- dashboardPage(
                 tags$li(class = "header", "SIR MODEL ANALYSIS"),
                 menuItem("Dashboard", tabName = "dashboard", icon = icon("dashboard")),
                 menuItem("Model Description", tabName = "model_desc", icon = icon("book-open")),
-                menuItem("GitHub Repo", icon = icon("github"), href = "https://github.com/peiyuliu-biostats/sir-estimation-comparison"),
+                menuItem("GitHub", icon = icon("github"), href = "https://github.com/peiyuliu-biostats/sir-estimation-comparison"),
+                menuItem("shinyapps.io", icon = icon("cloud-upload-alt"), href = "https://peiyuliu.shinyapps.io/sir-estimation-comparison/"),
                 menuItem("Author", tabName = "author", icon = icon("user-circle"))
     )
   ),
