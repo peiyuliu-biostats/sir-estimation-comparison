@@ -12,20 +12,19 @@ library(tidyr)
 library(promises)
 library(future)
 library(future.apply)
+# async strategy
 plan(multisession)
 
-param_input_factory <- function(inputId, label_symbol, tooltip_text, value, min, max, step) {
-  div(style = "display: flex; align-items: center; margin-bottom: 5px;", 
-      div(style = "width: 50%;", 
-          tags$label(HTML(label_symbol), style = "margin-right: 5px;"), 
-          tags$i(class = "fa fa-info-circle", 
-                 style = "color: #007bff; cursor: help;", 
-                 title = tooltip_text,
-                 `data-toggle` = "tooltip",
-                 `data-placement` = "top")), 
-      div(style = "width: 50%;", 
-          numericInput(inputId, label = NULL, value = value, min = min, max = max, step = step)))
-}
+# source Modules
+source("R/ui_inputs.R")
+source("R/ui_outputs.R")
+source("R/ui_description.R")
+source("R/server_inputs.R")
+source("R/server_outputs.R")
+
+ 
+# UI
+
 ui <- dashboardPage(
   dashboardHeader(title = "SIR Model Estimation", titleWidth = 250),
   dashboardSidebar(
@@ -39,9 +38,9 @@ ui <- dashboardPage(
                 menuItem("Author", tabName = "author", icon = icon("user-circle"))
     )
   ),
-   dashboardBody(
-     tags$head(tags$style(HTML("
-       
+  dashboardBody(
+    # theme custom CSS
+    tags$head(tags$style(HTML("
       .skin-blue .main-header .navbar,
       .skin-blue .main-header .logo {
         background-color: #6c757d !important;
@@ -65,8 +64,6 @@ ui <- dashboardPage(
         font-weight: bold;
         margin: 20px;
       }
-
-      /* New styles for the sidebar (added) */
       .skin-blue .main-sidebar {
         background-color: #ffffff !important;
       }
@@ -88,553 +85,41 @@ ui <- dashboardPage(
         color: #333333 !important;
       }
     "))),
+    
+    # assemble the body using the UI modules
     tabItems(
+      # dashboard tabs
       tabItem(tabName = "dashboard",
-              fluidRow(
-                box(title = "Measles Parameters Setting", status = "primary", solidHeader = TRUE, collapsible = TRUE, width = 6, 
-                    param_input_factory("N_0_m", "N_0:", "Total population size", 3500, 3000, 4000, 100), 
-                    param_input_factory("beta_0_m", "&beta;<sub>0</sub>:", "Initial transmission rate", 0.2, 0.05, 0.55, 0.01), 
-                    param_input_factory("gamma_0_m", "&gamma;<sub>0</sub>:", "Initial recovery rate", 0.21, 0.05, 0.55, 0.01), 
-                    param_input_factory("B_m", "B:", "Bootstrap sample size", 300, 50, 1000, 10), 
-                    param_input_factory("M_m", "M:", "Iteration times of MH", 3000, 500, 100000, 1000), 
-                    param_input_factory("M_burnin_m", "M_burnin:", "Burn-in period for MCMC", 2000, 100, 10000, 500), 
-                    param_input_factory("sd_beta_m", "SD_&beta;:", "Proposal SD for &beta; in MH", 0.014, 0.001, 0.1, 0.001), 
-                    param_input_factory("sd_gamma_m", "SD_&gamma;:", "Proposal SD for &gamma; in MH", 0.014, 0.001, 0.1, 0.001)),
-                box(title = "COVID-19 Parameters Setting", status = "warning", solidHeader = TRUE, collapsible = TRUE, width = 6, 
-                    param_input_factory("N_0_c", "N_0:", "Total population size (in 10k)", 32800, 32000, 36000, 100), 
-                    param_input_factory("beta_0_c", "&beta;<sub>0</sub>:", "Initial transmission rate", 0.2, 0.05, 0.55, 0.01), 
-                    param_input_factory("gamma_0_c", "&gamma;<sub>0</sub>:", "Initial recovery rate", 0.01, 0.01, 0.55, 0.01), 
-                    param_input_factory("B_c", "B:", "Bootstrap sample size", 300, 50, 1000, 10), 
-                    param_input_factory("M_c", "M:", "Iteration times of MH", 3000, 500, 100000, 1000), 
-                    param_input_factory("M_burnin_c", "M_burnin:", "Burn-in period for MCMC", 2000, 100, 10000, 500), 
-                    param_input_factory("sd_beta_c", "SD_&beta;:", "Proposal SD for &beta; in MH", 0.01, 0.001, 0.1, 0.001), 
-                    param_input_factory("sd_gamma_c", "SD_&gamma;:", "Proposal SD for &gamma; in MH", 0.01, 0.001, 0.1, 0.001))
-              ),
-              div(class = "center-btn-wrapper",
-                  actionButton("add_record", "Add Records & Run Analysis", icon = icon("plus"))
-              ),
-              fluidRow(box(title = "Analysis Records", status = "primary", solidHeader = FALSE, width = 12, collapsible = TRUE, DT::dataTableOutput("parameter_records"))),
-              fluidRow(
-                column(width = 6, box(title = "Measles Results", status = "primary", solidHeader = FALSE, width = NULL, 
-                                      uiOutput("measles_tabs_ui"))),
-                column(width = 6, box(title = "COVID-19 Results", status = "warning", solidHeader = FALSE, width = NULL, 
-                                      uiOutput("covid_tabs_ui")))
-              )
-      ),
-      tabItem(tabName = "model_desc",
-              fluidRow(
-                box(
-                  title = "Model & Methods Description", status = "primary", solidHeader = TRUE, width = 12,
-                  
-                  withMathJax(),
-                  
-                  h2("Overview"),
-                  p("This document describes the underlying models and statistical methods used in the 'SIR Model Estimation' Shiny application. The primary goal of this project is to compare the performance of different parameter estimation techniques when applied to two distinct types of epidemiological models: a", strong("Deterministic SIR Model"), "and a", strong("Stochastic SIR Model"),"."),
-                  p("The analysis is performed on two real-world datasets:"),
-                  tags$ol(
-                    tags$li(strong("Measles Data:"), "A classic dataset of measles cases in Niamey, Niger."),
-                    tags$li(strong("COVID-19 Data:"), "Aggregated data of active COVID-19 cases in the United States during the early phase of the pandemic.")
-                  ),
-                  p("This report will detail the mathematical formulation of each model, the fitting procedures employed, and present the final results for both datasets."),
-                  
-                  hr(),
-                  
-                  h2("1. The Deterministic SIR Model (ODE)"),
-                  p("The deterministic Susceptible-Infected-Recovered (SIR) model is a cornerstone of mathematical epidemiology. It describes the flow of individuals between three compartments using a set of Ordinary Differential Equations (ODEs). This model assumes a large, well-mixed population where randomness can be averaged out."),
-                  
-                  h3("Model Equations"),
-                  p("The dynamics of the system are governed by the following equations:"),
-                  withMathJax(p("$$ \\frac{dS}{dt} = -\\beta \\frac{S \\cdot I}{N} $$")),
-                  withMathJax(p("$$ \\frac{dI}{dt} = \\beta \\frac{S \\cdot I}{N} - \\gamma I $$")),
-                  withMathJax(p("$$ \\frac{dR}{dt} = \\gamma I $$")),
-                  p("Where:"),
-                  tags$ul(
-                    tags$li(strong("S(t):"), "Number of susceptible individuals at time t."),
-                    tags$li(strong("I(t):"), "Number of infected individuals at time t."),
-                    tags$li(strong("R(t):"), "Number of recovered (and immune) individuals at time t."),
-                    tags$li(strong("N:"), "Total population size (N = S + I + R, assumed constant)."),
-                    tags$li(strong(withMathJax("\\(\\beta\\) (beta):")), "The transmission rate."),
-                    tags$li(strong(withMathJax("\\(\\gamma\\) (gamma):")), "The recovery rate (inverse of the infectious period).")
-                  ),
-                  withMathJax(p("The basic reproduction number, \\(R_0 = \\frac{\\beta}{\\gamma}\\), represents the average number of secondary infections produced by a single infected individual in a completely susceptible population.")),
-                  
-                  h3("Parameter Estimation Methods"),
-                  withMathJax(p("The Shiny application implements three distinct methods to estimate the parameters \\(\\beta\\) and \\(\\gamma\\) from the observed case data.")),
-                  tags$ol(
-                    tags$li(strong("Least Squares (LS):"), withMathJax("This is the simplest method. It uses an optimization algorithm (`L-BFGS-B`) to find the parameter values (\\(\\beta, \\gamma\\)) that minimize the sum of squared differences between the model's predicted number of infected individuals, \\(I(t)\\), and the observed case counts.")),
-                    tags$li(strong("Bootstrap:"), "This method assesses the uncertainty in the parameter estimates. It involves repeatedly resampling the original dataset (with replacement) to create many new, slightly different datasets. The LS method is then applied to each of these new datasets. The distribution of the resulting parameter estimates provides a measure of their stability and is used to calculate confidence intervals."),
-                    tags$li(strong("Metropolis-Hastings (MCMC):"), "This is a Bayesian approach. It aims to find the entire posterior probability distribution of the parameters, given the data. It starts with an initial guess and 'walks' randomly through the parameter space, preferentially moving towards regions of higher likelihood. The collection of points from this 'walk' (the Markov chain) forms the posterior distribution, from which we can calculate means and credible intervals.")
-                  ),
-                  
-                  hr(),
-                  
-                  h2("2. The Stochastic SIR Model"),
-                  p("While the deterministic model describes the average behavior of a large population, the", withMathJax("Stochastic SIR Model"), "captures the inherent randomness and chance in disease transmission, especially in smaller populations. Instead of smooth flows, it models individual infection and recovery events."),
-                  
-                  h3("The Gillespie Algorithm"),
-                  p("Our stochastic model is implemented using the Gillespie Direct Method, an event-based algorithm. The core idea is:"),
-                  tags$ol(
-                    tags$li(strong("Define Events and Rates:"), withMathJax("At any given moment, there are two possible events that can happen: an"), withMathJax("Infection"), withMathJax("(rate \\(\\lambda_{inf} = \\beta \\frac{S \\cdot I}{N}\\)) and a"), withMathJax("Recovery"), withMathJax("(rate \\(\\lambda_{rec} = \\gamma I\\)).")),
-                    tags$li(strong("Simulate Time to Next Event:"), withMathJax("The time until the next event, \\(\\Delta t\\), is a random variable drawn from an exponential distribution with a rate equal to the total event rate, \\(\\lambda_{total} = \\lambda_{inf} + \\lambda_{rec}\\)."), withMathJax("$$\\Delta t \\sim \\text{Exponential}(\\lambda_{total})$$")),
-                    tags$li(strong("Simulate Which Event Occurs:"), withMathJax("The probability of the next event being an infection is proportional to its rate: \\(P(\\text{Infection}) = \\frac{\\lambda_{inf}}{\\lambda_{total}}\\).")),
-                    tags$li(strong("Update State and Repeat:"), withMathJax("The system time is advanced by \\(\\Delta t\\), the counts of S, I, and R are updated, and the process repeats until the epidemic ends (I=0)."))
-                  ),
-                  p("Because this model is random, running it once gives only one possible trajectory. To get a stable prediction, we must run it many times (e.g., 100 simulations) and average the number of infected individuals at each time point."),
-                  
-                  h3("Parameter Estimation & Fitting Results"),
-                  p("For the stochastic model, we use the average of multiple simulations as the prediction and fit the parameters using Least Squares and Bootstrap. You can review the full analysis with fitting results in the following HTML files:"),
-                  tags$ul(
-                    tags$li(tags$a("Full Stochastic Model Analysis for Measles", href="measles_stochastic.html", target="_blank", rel="noopener noreferrer")),
-                    tags$li(tags$a("Full Stochastic Model Analysis for COVID-19", href="covid_stochastic.html", target="_blank", rel="noopener noreferrer"))
-                  ),
-                  
-                  hr(),
-                  
-                  h2("3. Model Comparison and Conclusion"),
-                  tags$ul(
-                    tags$li(strong("Deterministic Model:"), "It's computationally fast and provides a good overview of the epidemic's average trend. It is well-suited for large populations where random fluctuations are minimal. The variety of fitting methods available (LS, Bootstrap, MCMC) allows for a deep analysis of parameter uncertainty."),
-                    tags$li(strong("Stochastic Model:"), "It provides a more realistic simulation of disease spread by modeling individual chance events. This is particularly important for smaller populations or when studying the probability of epidemic fade-out. However, it is computationally intensive, as it requires averaging many simulations for a stable prediction, making methods like MCMC impractical.")
-                  )
-                )
-              )
+              uimod_content_inputs(),
+              uimod_content_outputs()
       ),
       
-      tabItem(tabName = "author",
-              fluidRow(
-                box(
-                  title = "About The Author",
-                  solidHeader = TRUE,
-                  status = "primary",
-                  width = 12,
-                  h3("Author Information"),
-                  p("This application for SIR model estimation and comparison was developed by:"),
-                  tags$ul(
-                    tags$li(HTML("<b>Author:</b> Peiyu Liu")),
-                    tags$li(HTML("<b>Affiliation:</b> Department of Biostatistics, University of Florida")),
-                    tags$li(HTML("<b>Contact:</b> <a href='mailto:pyliu0620@outlook.com'>pyliu0620@outlook.com</a>")),
-                    tags$li(HTML("<b>GitHub:</b> <a href='https://github.com/peiyuliu-biostats' target='_blank'>https://github.com/peiyuliu-biostats</a>"))
-                  )
-                )
-              )
-      )
+      # static content tabs
+      uimod_content_doc(which = "model_desc"),
+      uimod_content_doc(which = "author")
     )
   )
 )
 
 
+# Server 
 server <- function(input, output, session) {
   
-  values <- reactiveValues(
-    measles_data = NULL,
-    covid_data = NULL,
-    measles_results = list(ls = NULL, bs = NULL, mh = NULL),
-    covid_results = list(ls = NULL, bs = NULL, mh = NULL),
-    records = data.frame(),
-    analysis_complete = FALSE,
-    analysis_running = FALSE
-  )
-
-  showModal(modalDialog("Loading initial datasets, please wait...", footer = NULL))
+  # 1. Inputs -> Reactive (State & Core Logic)
+  # this module handles data loading, computations, and state updates 
+  # it returns the reactive values object containing results and flags 
+  app_state <- servermod_inputs_computing(input, session)
   
-  tryCatch({
-    # --- Load and process Niamey measles data ---
-    niamey_url <- "http://kingaa.github.io/clim-dis/parest/niamey.csv"
-    values$measles_data <- read_csv(niamey_url, show_col_types = FALSE) %>%
-      filter(community == "A") %>%
-      select(time = biweek, cases = measles) %>%
-      arrange(time)
-    
-    # --- Load and process JHU COVID-19 data ---
-    jhu_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv"
-    jhu_data <- read_csv(jhu_url, show_col_types = FALSE)
-    
-    covid_processed <- jhu_data %>%
-      select(-c(UID, iso2, iso3, code3, FIPS, Admin2, Province_State,
-                Country_Region, Lat, Long_, Combined_Key)) %>%
-      pivot_longer(cols = matches("^\\d+/\\d+/\\d+$"), names_to = "Date", values_to = "Cumulative_Cases") %>%
-      mutate(Date = mdy(Date)) %>%
-      group_by(Date) %>%
-      summarise(Cumulative_Cases = sum(Cumulative_Cases, na.rm = TRUE), .groups = 'drop') %>%
-      arrange(Date) %>%
-      mutate(Daily_New_Cases = Cumulative_Cases - lag(Cumulative_Cases, default = 0)) %>%
-      filter(Daily_New_Cases >= 0, Date >= as.Date("2020-01-22")) %>%
-      mutate(Active_Cases = zoo::rollsum(Daily_New_Cases, k = 14, fill = NA, align = "right")) %>%
-      filter(!is.na(Active_Cases))
-    
-    values$covid_data <- covid_processed %>%
-      mutate(
-        Days_Since_Start = as.numeric(Date - min(Date)),
-        Biweek_Group = floor(Days_Since_Start / 14)
-      ) %>%
-      group_by(Biweek_Group) %>%
-      summarise(
-        Start_Date = min(Date),
-        End_Date = max(Date),
-        cases = round(mean(Active_Cases, na.rm = TRUE)/10000),
-        .groups = 'drop'
-      ) %>%
-      filter(Biweek_Group >= 0, cases > 0) %>%
-      mutate(time = Biweek_Group + 1) %>%
-      select(time, cases, Start_Date, End_Date) %>%
-      arrange(time) %>%
-      filter(time <= 35)
-    
-    # If data loading succeeds, remove the modal dialog.
-    removeModal()
-    
-  }, error = function(e) {
- 
-    showModal(modalDialog(
-      title = "Error",
-      "Failed to load initial datasets. Please check your internet connection and refresh the page.",
-      footer = NULL
-    ))
-  })
+  # 2. outputs (rendering)
+  # takes the reactive state and renders plots/tables.
+  servermod_output_render(input, output, app_state)
   
-  # --- 2. Moedl and Analysis ---
+  # 3. Update UI
+  # (No needed now)
   
-  sir_model <- function(time, state, parameters) {
-    with(as.list(c(state, parameters)), {
-      N_total <- S + I + R
-      dS <- -beta * S * I / N_total
-      dI <- beta * S * I / N_total - gamma * I
-      dR <- gamma * I
-      list(c(dS, dI, dR))
-    })
-  }
-  
-  # main analysis function
-  run_single_analysis <- function(dataset, N, initial_beta, initial_gamma, n_bootstrap, n_iterations, burnin, proposal_sd_beta, proposal_sd_gamma) {
-    
-    # --- Least Squares (LS) Estimation ---
-    # Defines the objective function for LS: minimize the sum of squared errors (SSE).
-    ls_objective <- function(params) {
-      if(any(params <= 0)) return(1e10) # Penalize non-positive parameters.
-      init <- c(S = N - 1, I = 1, R = 0)
-      tryCatch({
-        sol <- ode(y = init, times = dataset$time, func = sir_model,
-                   parms = list(beta = params[1], gamma = params[2]))
-        predicted_I <- sol[, "I"]
-        sum((dataset$cases - predicted_I)^2, na.rm = TRUE)
-      }, error = function(e) 1e10) # Return a large value if the solver fails.
-    }
-    # Use `optim` to find the parameters that minimize the objective function.
-    ls_result <- optim(par = c(initial_beta, initial_gamma), fn = ls_objective, method = "L-BFGS-B", lower = c(0.001, 0.001))
-    ls_results <- list(beta = ls_result$par[1], gamma = ls_result$par[2], R0 = ls_result$par[1] / ls_result$par[2], convergence = ls_result$convergence)
-    
-    # --- Method 2: Bootstrap (parallelized for speed) ---
-    # `future_lapply` distributes the bootstrap iterations across multiple CPU cores.
-    # `future.seed = TRUE` ensures that the random sampling is reproducible.
-    bootstrap_list_results <- future_lapply(1:n_bootstrap, function(i) {
-      sample_indices <- sample(1:nrow(dataset), replace = TRUE)
-      bootstrap_data <- dataset[sample_indices, ]
-      bootstrap_data <- bootstrap_data[order(bootstrap_data$time), ]
-      
-      bootstrap_objective <- function(params) {
-        if(any(params <= 0)) return(1e10)
-        init <- c(S = N - 1, I = 1, R = 0)
-        tryCatch({
-          sol <- ode(y = init, times = bootstrap_data$time, func = sir_model, parms = list(beta = params[1], gamma = params[2]))
-          predicted_I <- sol[, "I"]
-          sum((bootstrap_data$cases - predicted_I)^2, na.rm = TRUE)
-        }, error = function(e) 1e10)
-      }
-      
-      tryCatch({
-        bs_fit <- optim(par = c(initial_beta, initial_gamma), fn = bootstrap_objective, method = "L-BFGS-B", lower = c(0.001, 0.001))
-        # Only return parameters if the fit is plausible (not excessively large).
-        if(!any(bs_fit$par > 10)) return(bs_fit$par) else return(NULL)
-      }, error = function(e) return(NULL))
-    }, future.seed = TRUE)
-    
-    # Process bootstrap results: filter out NULLs (failed fits) and combine into a matrix.
-    valid_bs_params <- bootstrap_list_results[!sapply(bootstrap_list_results, is.null)]
-    bootstrap_results_matrix <- if (length(valid_bs_params) > 0) do.call(rbind, valid_bs_params) else matrix(NA, 0, 2)
-    
-    bs_results <- NULL
-    if (nrow(bootstrap_results_matrix) > 0) {
-      bs_results <- list(
-        beta_mean = mean(bootstrap_results_matrix[, 1]),
-        gamma_mean = mean(bootstrap_results_matrix[, 2]),
-        beta_ci = quantile(bootstrap_results_matrix[, 1], c(0.025, 0.975)),
-        gamma_ci = quantile(bootstrap_results_matrix[, 2], c(0.025, 0.975)),
-        bootstrap_data = bootstrap_results_matrix,
-        n_valid = nrow(bootstrap_results_matrix)
-      )
-      bs_results$R0 <- bs_results$beta_mean / bs_results$gamma_mean
-    }
-    
-    # --- Method 3: Metropolis-Hastings (MCMC) ---
-    # Log-likelihood function assuming a Poisson distribution for case counts.
-    mh_log_likelihood <- function(params) {
-      if(any(params <= 0)) return(-Inf)
-      init <- c(S = N - 1, I = 1, R = 0)
-      tryCatch({
-        sol <- ode(y = init, times = dataset$time, func = sir_model, parms = list(beta = params[1], gamma = params[2]))
-        predicted_I <- sol[, "I"]
-        if(any(predicted_I <= 0)) return(-Inf)
-        sum(dpois(dataset$cases, lambda = predicted_I, log = TRUE), na.rm = TRUE)
-      }, error = function(e) -Inf)
-    }
-    
-    mh_chain <- matrix(NA, nrow = n_iterations, ncol = 3)
-    colnames(mh_chain) <- c("beta", "gamma", "log_posterior")
-    current_params <- c(initial_beta, initial_gamma)
-    current_posterior <- mh_log_likelihood(current_params)
-    mh_chain[1, ] <- c(current_params, current_posterior)
-    accepted <- 0
-    #MCMC loop is inherently sequential.
-    for(i in 2:n_iterations) {
-      proposed_params <- current_params + rnorm(2, 0, c(proposal_sd_beta, proposal_sd_gamma))
-      proposed_params <- pmax(proposed_params, 0.001) # Ensure params are positive.
-      proposed_posterior <- mh_log_likelihood(proposed_params)
-      
-      if(is.finite(proposed_posterior) && is.finite(current_posterior)) {
-        accept_prob <- exp(proposed_posterior - current_posterior)
-        if(runif(1) < accept_prob) {
-          current_params <- proposed_params
-          current_posterior <- proposed_posterior
-          accepted <- accepted + 1
-        }
-      }
-      mh_chain[i, ] <- c(current_params, current_posterior)
-    }
-    
-    # Discard the burn-in period  
-    mh_final <- mh_chain[(burnin + 1):n_iterations, ]
-    mh_results <- list(
-      beta_mean = mean(mh_final[, "beta"]),
-      gamma_mean = mean(mh_final[, "gamma"]),
-      beta_ci = quantile(mh_final[, "beta"], c(0.025, 0.975)),
-      gamma_ci = quantile(mh_final[, "gamma"], c(0.025, 0.975)),
-      chain_data = mh_final,
-      full_chain = mh_chain,
-      acceptance_rate = accepted / n_iterations
-    )
-    mh_results$R0 <- mh_results$beta_mean / mh_results$gamma_mean
-    
-    return(list(ls = ls_results, bs = bs_results, mh = mh_results))
-  }
-  
-  # --- 3. Event ---
-  
-  # This observer triggers when the "Add Records & Run Analysis" button is clicked.
-  observeEvent(input$add_record, {
-    if (is.null(values$measles_data) || is.null(values$covid_data)) {
-      showNotification("Data not loaded correctly at startup. Please refresh.", type = "error")
-      return()
-    }
-    
-    values$analysis_running <- TRUE
-    withProgress(message = 'Running Analysis...', value = 0, {
-      incProgress(0.1, detail = "Starting measles analysis... This may take a moment.")
-      values$measles_results <- run_single_analysis(
-        values$measles_data, input$N_0_m, input$beta_0_m, input$gamma_0_m,
-        input$B_m, input$M_m, input$M_burnin_m, input$sd_beta_m, input$sd_gamma_m
-      )
-      
-      incProgress(0.5, detail = "Starting COVID-19 analysis... This may take a moment.")
-      values$covid_results <- run_single_analysis(
-        values$covid_data, input$N_0_c, input$beta_0_c, input$gamma_0_c,
-        input$B_c, input$M_c, input$M_burnin_c, input$sd_beta_c, input$sd_gamma_c
-      )
-      
-      incProgress(0.9, detail = "Finalizing and creating records...")
-      
-      measles_record <- data.frame(
-        Dataset = "Measles",
-        LS_Beta = round(values$measles_results$ls$beta, 4), LS_Gamma = round(values$measles_results$ls$gamma, 4), LS_R0 = round(values$measles_results$ls$R0, 2),
-        BS_Beta = round(values$measles_results$bs$beta_mean, 4), BS_Gamma = round(values$measles_results$bs$gamma_mean, 4), BS_R0 = round(values$measles_results$bs$R0, 2),
-        MH_Beta = round(values$measles_results$mh$beta_mean, 4), MH_Gamma = round(values$measles_results$mh$gamma_mean, 4), MH_R0 = round(values$measles_results$mh$R0, 2),
-        stringsAsFactors = FALSE
-      )
-      covid_record <- data.frame(
-        Dataset = "COVID-19",
-        LS_Beta = round(values$covid_results$ls$beta, 4), LS_Gamma = round(values$covid_results$ls$gamma, 4), LS_R0 = round(values$covid_results$ls$R0, 2),
-        BS_Beta = round(values$covid_results$bs$beta_mean, 4), BS_Gamma = round(values$covid_results$bs$gamma_mean, 4), BS_R0 = round(values$covid_results$bs$R0, 2),
-        MH_Beta = round(values$covid_results$mh$beta_mean, 4), MH_Gamma = round(values$covid_results$mh$gamma_mean, 4), MH_R0 = round(values$covid_results$mh$R0, 2),
-        stringsAsFactors = FALSE
-      )
-      
-      values$records <- rbind(values$records, measles_record, covid_record)
-      values$analysis_complete <- TRUE
-      values$analysis_running <- FALSE
-      incProgress(1, detail = "Analysis completed!")
-    })
-    showNotification("Analysis complete and records added!", type = "message")
-  })
-  
-  # --- 4. Output ---
-  
-  # Render the data table for analysis records.
-  output$parameter_records <- DT::renderDataTable({
-    DT::datatable(values$records, selection = "single", options = list(scrollX = TRUE, pageLength = 5))
-  })
-  
-  # --- plot helper ---
-  create_comparison_plot <- function(data_set, results, N, dataset_name, color_scheme) {
-    # Check if results are available before attempting to plot
-    if(is.null(results$ls) || is.null(results$bs) || is.null(results$mh)) {
-      return(plot_ly() %>% add_text(x = 0.5, y = 0.5, text = "Analysis not completed"))
-    }
-    
-    time_seq <- seq(min(data_set$time), max(data_set$time), length.out = 100)
-    init <- c(S = N - 1, I = 1, R = 0)
-    
-    tryCatch({
-      # --- Calculate model predictions based on estimated parameters ---
-      sol_ls <- ode(y = init, times = time_seq, func = sir_model, parms = list(beta = results$ls$beta, gamma = results$ls$gamma))
-      sol_bs <- ode(y = init, times = time_seq, func = sir_model, parms = list(beta = results$bs$beta_mean, gamma = results$bs$gamma_mean))
-      sol_mh <- ode(y = init, times = time_seq, func = sir_model, parms = list(beta = results$mh$beta_mean, gamma = results$mh$gamma_mean))
-      
-      # --- Calculate confidence intervals for Bootstrap ---
-      bs_samples <- results$bs$bootstrap_data
-      bs_predictions <- array(NA, dim = c(length(time_seq), nrow(bs_samples)))
-      for(i in 1:nrow(bs_samples)) {
-        sol_temp <- ode(y = init, times = time_seq, func = sir_model,
-                        parms = list(beta = bs_samples[i,1], gamma = bs_samples[i,2]))
-        bs_predictions[,i] <- sol_temp[,"I"]
-      }
-      bs_ci_lower <- apply(bs_predictions, 1, quantile, 0.025, na.rm = TRUE)
-      bs_ci_upper <- apply(bs_predictions, 1, quantile, 0.975, na.rm = TRUE)
-      
-      # --- Calculate credible intervals for Metropolis-Hastings ---
-      mh_samples <- results$mh$chain_data[,1:2]
-      mh_predictions <- array(NA, dim = c(length(time_seq), nrow(mh_samples)))
-      # Use a subsample of the MCMC chain for faster plotting of intervals
-      sample_indices <- sample(1:nrow(mh_samples), min(200, nrow(mh_samples))) 
-      for(i in seq_along(sample_indices)) {
-        sol_temp <- ode(y = init, times = time_seq, func = sir_model,
-                        parms = list(beta = mh_samples[sample_indices[i],1], gamma = mh_samples[sample_indices[i],2]))
-        mh_predictions[,i] <- sol_temp[,"I"]
-      }
-      mh_ci_lower <- apply(mh_predictions[,1:length(sample_indices)], 1, quantile, 0.025, na.rm = TRUE)
-      mh_ci_upper <- apply(mh_predictions[,1:length(sample_indices)], 1, quantile, 0.975, na.rm = TRUE)
-      
-      # --- Create the plot with reordered layers and legend control ---
-      p <- plot_ly() %>%
-        # Group 1: Data and Least Squares
-        add_markers(data = data_set, x = ~time, y = ~cases, name = "Observed Data", 
-                    marker = list(color = "black", size = 8), legendgroup = "group1") %>%
-        add_lines(x = time_seq, y = sol_ls[,"I"], name = "Least Squares", 
-                  line = list(color = color_scheme[1], width = 3), legendgroup = "group1") %>%
-        
-        # Group 2: Metropolis-Hastings (CI and Fit)
-        add_ribbons(x = time_seq, ymin = mh_ci_lower, ymax = mh_ci_upper, name = "MH 95% CI", 
-                    fillcolor = "rgba(50, 205, 50, 0.2)", line = list(color = "transparent"), legendgroup = "group2") %>%
-        add_lines(x = time_seq, y = sol_mh[,"I"], name = "Metropolis-Hastings", 
-                  line = list(color = color_scheme[3], width = 3, dash = "dot"), legendgroup = "group2") %>%
-        
-        # Group 3: Bootstrap (CI and Fit)
-        add_ribbons(x = time_seq, ymin = bs_ci_lower, ymax = bs_ci_upper, name = "Bootstrap 95% CI", 
-                    fillcolor = "rgba(70, 130, 180, 0.2)", line = list(color = "transparent"), legendgroup = "group3") %>%
-        add_lines(x = time_seq, y = sol_bs[,"I"], name = "Bootstrap", 
-                  line = list(color = color_scheme[2], width = 3, dash = "dash"), legendgroup = "group3") %>%
-        
-        # --- Layout definition with legend control ---
-        layout(
-          title = list(text = paste(dataset_name, "Fit Comparison"), font = list(size = 12), x = 0),
-          xaxis = list(title = "Time Period"),
-          yaxis = list(title = "Cases"),
-          legend = list(
-            orientation = "h",        # Horizontal legend
-            xanchor = "center",
-            x = 0.5,
-            y = -0.3,
-            traceorder = "grouped"    # Order legend items by their 'legendgroup'
-          )
-        )
-      p
-      
-    }, error = function(e) {
-    
-      plot_ly() %>% add_text(x = 0.5, y = 0.5, text = "Error creating plot")
-    })
-  }
-  
-  create_mcmc_trace <- function(results, dataset_name) {
-    if(is.null(results$mh)) return(plot_ly() %>% add_text(x = 0.5, y = 0.5, text = "Analysis not completed"))
-    chain_data <- results$mh$chain_data
-    p1 <- plot_ly(y = ~chain_data[,1], type = "scatter", mode = "lines", name = "β", line = list(color = "darkred")) %>% layout(yaxis = list(title = "β"))
-    p2 <- plot_ly(y = ~chain_data[,2], type = "scatter", mode = "lines", name = "γ", line = list(color = "darkgreen")) %>% layout(yaxis = list(title = "γ"))
-    subplot(p1, p2, nrows = 2, shareX = TRUE) %>%
-      layout(title = list(text = paste(dataset_name, "MCMC Trace"), font = list(size = 12), x = 0), xaxis = list(title = "Iteration"), showlegend = FALSE)
-  }
-  
-  create_posterior_plot <- function(results, dataset_name) {
-    if(is.null(results$mh)) return(plot_ly() %>% add_text(x = 0.5, y = 0.5, text = "Analysis not completed"))
-    chain_data <- results$mh$chain_data
-    beta_hist <- hist(chain_data[,1], plot = FALSE)
-    gamma_hist <- hist(chain_data[,2], plot = FALSE)
-    p1 <- plot_ly(x = ~chain_data[,1], type = "histogram", name = "β", marker = list(color = "pink", opacity = 0.7)) %>%
-      add_segments(x = results$mh$beta_mean, xend = results$mh$beta_mean, y = 0, yend = max(beta_hist$counts) * 0.8, line = list(color = "red", dash = "dash", width = 3)) %>%
-      layout(xaxis = list(title = "β"), yaxis = list(title = "Density"))
-    p2 <- plot_ly(x = ~chain_data[,2], type = "histogram", name = "γ", marker = list(color = "lightcoral", opacity = 0.7)) %>%
-      add_segments(x = results$mh$gamma_mean, xend = results$mh$gamma_mean, y = 0, yend = max(gamma_hist$counts) * 0.8, line = list(color = "red", dash = "dash", width = 3)) %>%
-      layout(xaxis = list(title = "γ"), yaxis = list(title = "Density"))
-    subplot(p1, p2, nrows = 2, shareY = FALSE) %>%
-      layout(title = list(text = paste(dataset_name, "MH Posterior"), font = list(size = 12), x = 0), showlegend = FALSE)
-  }
-  
-  create_bootstrap_dist <- function(results, dataset_name) {
-    if(is.null(results$bs)) return(plot_ly() %>% add_text(x = 0.5, y = 0.5, text = "Analysis not completed"))
-    bs_data <- results$bs$bootstrap_data
-    density_beta <- density(bs_data[,1])
-    density_gamma <- density(bs_data[,2])
-    p1 <- plot_ly(x = ~density_beta$x, y = ~density_beta$y, type = "scatter", mode = "lines", fill = "tozeroy", fillcolor = "rgba(70, 130, 180, 0.3)", line = list(color = "steelblue"), name = "β density") %>%
-      add_segments(x = results$bs$beta_mean, xend = results$bs$beta_mean, y = 0, yend = max(density_beta$y) * 0.8, line = list(color = "red", dash = "dash", width = 3)) %>%
-      layout(xaxis = list(title = "β"), yaxis = list(title = "Density"))
-    p2 <- plot_ly(x = ~density_gamma$x, y = ~density_gamma$y, type = "scatter", mode = "lines", fill = "tozeroy", fillcolor = "rgba(50, 205, 50, 0.3)", line = list(color = "limegreen"), name = "γ density") %>%
-      add_segments(x = results$bs$gamma_mean, xend = results$bs$gamma_mean, y = 0, yend = max(density_gamma$y) * 0.8, line = list(color = "red", dash = "dash", width = 3)) %>%
-      layout(xaxis = list(title = "γ"), yaxis = list(title = "Density"))
-    subplot(p1, p2, nrows = 2, shareY = FALSE) %>%
-      layout(title = list(text = paste(dataset_name, "Bootstrap Distribution"), font = list(size = 12), x = 0), showlegend = FALSE)
-  }
-  
-  
-  #UI for the measles results box.
-  # It shows a message before analysis and the tabset with plots after completion.
-  output$measles_tabs_ui <- renderUI({
-    if(values$analysis_running && !values$analysis_complete) {
-      div(class = "loading-message", h4("Analysis in Progress..."), p("Please wait for measles data processing."))
-    } else if(values$analysis_complete) {
-      tabsetPanel(id = "measles_tabs",
-                  tabPanel("Fit Comparison", plotlyOutput("measles_fit_plot", height = "350px")),
-                  tabPanel("MCMC Trace", plotlyOutput("measles_mcmc_trace", height = "350px")),
-                  tabPanel("MH Posterior", plotlyOutput("measles_mh_posterior", height = "350px")),
-                  tabPanel("Bootstrap Distribution", plotlyOutput("measles_bs_dist", height = "350px"))
-      )
-    } else {
-      div(class = "loading-message", p("Click 'Add Records & Run Analysis' to begin."))
-    }
-  })
-  
-  # UI for the COVID-19 results box.
-  output$covid_tabs_ui <- renderUI({
-    if(values$analysis_running && !values$analysis_complete) {
-      div(class = "loading-message", h4("Analysis in Progress..."), p("Please wait for COVID-19 data processing."))
-    } else if(values$analysis_complete) {
-      tabsetPanel(id = "covid_tabs",
-                  tabPanel("Fit Comparison", plotlyOutput("covid_fit_plot", height = "350px")),
-                  tabPanel("MCMC Trace", plotlyOutput("covid_mcmc_trace", height = "350px")),
-                  tabPanel("MH Posterior", plotlyOutput("covid_mh_posterior", height = "350px")),
-                  tabPanel("Bootstrap Distribution", plotlyOutput("covid_bs_dist", height = "350px"))
-      )
-    } else {
-      div(class = "loading-message", p("Click 'Add Records & Run Analysis' to begin."))
-    }
-  })
-  
-  # plotly outputs for each specific plot.
-  output$measles_fit_plot <- renderPlotly({ create_comparison_plot(values$measles_data, values$measles_results, input$N_0_m, "Measles", c("red", "blue", "green")) })
-  output$covid_fit_plot <- renderPlotly({ create_comparison_plot(values$covid_data, values$covid_results, input$N_0_c, "COVID-19", c("darkred", "darkblue", "darkgreen")) })
-  output$measles_mcmc_trace <- renderPlotly({ create_mcmc_trace(values$measles_results, "Measles") })
-  output$covid_mcmc_trace <- renderPlotly({ create_mcmc_trace(values$covid_results, "COVID-19") })
-  output$measles_mh_posterior <- renderPlotly({ create_posterior_plot(values$measles_results, "Measles") })
-  output$covid_mh_posterior <- renderPlotly({ create_posterior_plot(values$covid_results, "COVID-19") })
-  output$measles_bs_dist <- renderPlotly({ create_bootstrap_dist(values$measles_results, "Measles") })
-  output$covid_bs_dist <- renderPlotly({ create_bootstrap_dist(values$covid_results, "COVID-19") })
-  
+  # 4. UX Enhancements & Performance
+  # performance: `plan(multisession)` is set globally.
+  # UX: progress bars and modals are handled within servermod_inputs_computing.
 }
 
-shinyApp(ui = ui, server = server)
+shinyApp(ui, server)

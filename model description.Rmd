@@ -12,20 +12,6 @@ output:
     toc_float: true
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align = 'center')
-# Load all necessary packages for the entire document
-library(deSolve)
-library(ggplot2)
-library(dplyr)
-library(gridExtra)
-library(readr)
-library(lubridate)
-library(zoo)
-library(tidyr)
-library(Rcpp)
-```
-
 # Overview
 
 This document describes the underlying models and statistical methods used in the "SIR Model Estimation" Shiny application. The primary goal of this project is to compare the performance of different parameter estimation techniques when applied to two distinct types of epidemiological models: a **Deterministic SIR Model** and a **Stochastic SIR Model**.
@@ -108,19 +94,7 @@ For the stochastic model, we use the average of multiple simulations as the pred
 
 ### Fitting Results (Stochastic Model)
 
-The following code block runs the fitting procedure for the stochastic model, using the Rcpp-accelerated functions you provided.
-
-```{r stochastic_fitting, cache=TRUE}
- 
-```
-
-The plots below show the results of fitting the stochastic model's average trajectory to the data.
-
-```{r stochastic_plots, fig.width=12, fig.height=6}
- 
-```
-
-The average of many stochastic simulations often resembles the deterministic curve, but fitting to this average accounts for the inherent randomness in the event timings.
+You can review the full analysis with fitting results in this html file: 
 
 ---
 

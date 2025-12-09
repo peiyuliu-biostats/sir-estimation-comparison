@@ -5,6 +5,6 @@ account: peiyuliu
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 15479706
-bundleId: 10923313
+bundleId: 11292646
 url: https://peiyuliu.shinyapps.io/sir-estimation-comparison/
 version: 1
